@@ -32,7 +32,7 @@ const int ENC_A = 4;
 const int ENC_B = 32;
 
 const int PIN_IR_SENSOR = 27;
-const int IR_ACTIVE_STATE = LOW;  // Ganti LOW jika modul IR aktif-LOW
+const int IR_ACTIVE_STATE = LOW;  // Ganti HIGH jika modul IR aktif-HIGH
 
 const int PIN_SERVO = 13;
 
@@ -47,13 +47,13 @@ const int PIN_HX711_SCK = 17;
 
 // ================== PARAMETER LOADCELL ==================
 // Salin angka hasil kalibrasi ('k') dari Serial Monitor ke baris ini agar permanen:
-float CALIBRATION_FACTOR = 11209.3203;       
+float CALIBRATION_FACTOR = 428.90;       
+long  zero_offset        = 0;
 const float MIN_ITEM_G        = 5.0;   
 const unsigned long SETTLE_MS = 500;
-const int WEIGHT_SAMPLES      = 10;
+const int WEIGHT_SAMPLES      = 5;    // 5x bacaRawStabil() (total 35 sampel median-filtered)
 
 // ================== THRESHOLD TOLERANSI DEFAULT (SATUAN GRAM) ==================
-// Nilai ini disinkronkan dengan default database web (Product: ToleranceMin 300g, ToleranceMax 1000g)
 float toleranceMin = 300.0;     // Di bawah ini = RINGAN (disortir via servo ke wadah reject/ringan)
 float toleranceMax = 1000.0;    // Di atas ini  = ERROR  (motor konveyor berhenti)
                                 // Di antara    = BERAT  (pass, jalur lurus konveyor)
@@ -74,7 +74,7 @@ const int PULSES_PER_MOTOR_REV = 11;
 const float GEAR_RATIO = 90.0;
 const float PULSES_PER_SHAFT_REV = PULSES_PER_MOTOR_REV * GEAR_RATIO;
 
-const int freq = 5000;       // 1 kHz (rekomendasi L298N; 30 kHz terlalu tinggi dan menyebabkan voltage drop drastis pada L298N)
+const int freq = 5000;
 const int resolution = 8;
 const int PWM_MAX = 255;
 
@@ -129,6 +129,117 @@ bool irClearSeen = false;
 unsigned long irClearTime = 0;
 
 bool tareRequested = false;
+
+// ================== FORWARD DECLARATIONS ==================
+bool irDetected();
+void startConveyor();
+void stopConveyor();
+void resetCycle();
+
+// ================== FUNGSI LOADCELL ANTI-SPIKE ==================
+long bacaRawStabil() {
+  const int jumlahSampel = 7;
+  long data[jumlahSampel];
+
+  for (int i = 0; i < jumlahSampel; i++) {
+    unsigned long waitStart = millis();
+    while (!scale.is_ready()) {
+      if (millis() - waitStart > 200) return zero_offset; // Cegah hang jika HX711 terputus
+      delay(1);
+    }
+    data[i] = scale.read();
+  }
+
+  // Urutkan sampel (Bubble Sort) untuk membuang nilai ekstrem atas & bawah
+  for (int i = 0; i < jumlahSampel - 1; i++) {
+    for (int j = i + 1; j < jumlahSampel; j++) {
+      if (data[i] > data[j]) {
+        long temp = data[i];
+        data[i] = data[j];
+        data[j] = temp;
+      }
+    }
+  }
+
+  // Ambil rata-rata dari 3 nilai tengah
+  return (data[2] + data[3] + data[4]) / 3;
+}
+
+float getWeightGram() {
+  if (fabs(CALIBRATION_FACTOR) < 0.0001) return 0.0;
+  long rawSekarang = bacaRawStabil();
+  float beratGram = (float)(rawSekarang - zero_offset) / CALIBRATION_FACTOR;
+
+  // Deadzone di sekitar 0 gram untuk meredam fluktuasi mikro
+  if (fabs(beratGram) < 0.2) {
+    beratGram = 0.0;
+  }
+  return beratGram;
+}
+
+void prosesTare() {
+  Serial.println("[LOADCELL] Melakukan Tare (Nol-kan timbangan), pastikan kosong...");
+  delay(500);
+  zero_offset = bacaRawStabil();
+  Serial.printf("[LOADCELL] Tare selesai! Zero Offset: %ld\n", zero_offset);
+}
+
+// ================== KALIBRASI INTERAKTIF VIA SERIAL ==================
+void runInteractiveCalibration() {
+  stopConveyor();
+  Serial.println("\n==================================================");
+  Serial.println("[KALIBRASI] Mode Kalibrasi LoadCell HX711");
+  Serial.println("Langkah 1: KOSONGKAN platform timbangan sekarang!");
+  Serial.println("Menunggu 3 detik untuk mengunci titik nol (Tare)...");
+  delay(3000);
+
+  zero_offset = bacaRawStabil();
+  Serial.printf("[KALIBRASI] Tare selesai! Zero Offset terkunci di: %ld\n", zero_offset);
+  Serial.println("\nLangkah 2: Letakkan barang uji di atas load cell,");
+  Serial.println("lalu KETIK berat asli barang dalam gram (contoh: 65 atau 314.7) dan tekan ENTER:");
+
+  while (Serial.available()) Serial.read();
+
+  String input = "";
+  while (true) {
+    if (Serial.available() > 0) {
+      input = Serial.readStringUntil('\n');
+      input.trim();
+      if (input.length() > 0) break;
+    }
+    delay(20);
+  }
+
+  float knownWeight = input.toFloat();
+  if (knownWeight <= 0) {
+    Serial.println("[KALIBRASI] Input tidak valid (harus > 0), kalibrasi dibatalkan.\n");
+    return;
+  }
+
+  Serial.printf("[KALIBRASI] Mengukur beban %.1f g, jangan sentuh load cell...\n", knownWeight);
+  delay(1000);
+
+  long rawBeban = bacaRawStabil();
+  long selisihRaw = rawBeban - zero_offset;
+
+  if (abs(selisihRaw) < 100) {
+    Serial.println("[KALIBRASI] ERROR: Perubahan raw terlalu kecil! Pastikan benda sudah diletakkan.\n");
+    return;
+  }
+
+  CALIBRATION_FACTOR = (float)selisihRaw / knownWeight;
+
+  Serial.println("--------------------------------------------------");
+  Serial.printf("Raw Kosong (Offset) : %ld\n", zero_offset);
+  Serial.printf("Raw Dengan Beban    : %ld\n", rawBeban);
+  Serial.printf("Berat Referensi     : %.1f g\n", knownWeight);
+  Serial.printf("CALIBRATION_FACTOR  : %.4f\n", CALIBRATION_FACTOR);
+  Serial.printf("Hasil Cek Timbang   : %.1f g\n", getWeightGram());
+  Serial.println("--------------------------------------------------");
+  Serial.println("SALIN baris berikut ke kode Anda agar tersimpan permanen:");
+  Serial.printf("float CALIBRATION_FACTOR = %.4f;\n", CALIBRATION_FACTOR);
+  Serial.println("==================================================\n");
+}
 
 // ================== TIMESTAMP HELPER ==================
 String getTimestamp() {
@@ -288,7 +399,7 @@ void connectMqtt() {
     mqtt.subscribe("checkweigher/config/setpoint");
 
     Serial.println("[MQTT] Subscribe: command, config/threshold, config/setpoint");
-    publishDeviceStatus(); // Kirim status awal ke dashboard segera setelah connect
+    publishDeviceStatus();
   } else {
     Serial.printf("gagal, rc=%d\n", mqtt.state());
   }
@@ -365,52 +476,6 @@ String determineCategory(float weight) {
   return "BERAT";
 }
 
-// ================== KALIBRASI INTERAKTIF VIA SERIAL ==================
-void runInteractiveCalibration() {
-  stopConveyor();
-  Serial.println("\n==========================================");
-  Serial.println("[KALIBRASI] Mode Kalibrasi LoadCell HX711");
-  Serial.println("Langkah 1: KOSONGKAN timbangan sekarang!");
-  Serial.println("Menunggu 3 detik untuk mengenolkan (Tare)...");
-  delay(3000);
-
-  scale.set_scale(); // Reset faktor skala ke 1
-  scale.tare(15);
-  Serial.println("[KALIBRASI] Tare selesai (Titik 0 terkunci).");
-  Serial.println("\nLangkah 2: Letakkan barang uji di atas timbangan,");
-  Serial.println("lalu KETIK berat barang tersebut dalam gram (contoh: 20 atau 30) dan tekan ENTER:");
-
-  while (Serial.available()) Serial.read();
-
-  while (!Serial.available()) {
-    delay(50);
-  }
-  float knownWeight = Serial.parseFloat();
-  while (Serial.available()) Serial.read();
-
-  if (knownWeight <= 0) {
-    Serial.println("[KALIBRASI] Input tidak valid, kalibrasi dibatalkan.");
-    scale.set_scale(CALIBRATION_FACTOR);
-    return;
-  }
-
-  Serial.printf("[KALIBRASI] Mengukur nilai sensor untuk beban %.1f g...\n", knownWeight);
-  delay(1000);
-  float rawValue = scale.get_units(20);
-
-  CALIBRATION_FACTOR = rawValue / knownWeight;
-  scale.set_scale(CALIBRATION_FACTOR);
-
-  Serial.println("------------------------------------------");
-  Serial.printf("Raw Sensor Value   : %.2f\n", rawValue);
-  Serial.printf("CALIBRATION_FACTOR : %.4f\n", CALIBRATION_FACTOR);
-  Serial.printf("Hasil Cek Timbang  : %.2f g\n", scale.get_units(10));
-  Serial.println("------------------------------------------");
-  Serial.println("SALIN baris berikut ke kode Anda agar tersimpan permanen:");
-  Serial.printf("float CALIBRATION_FACTOR = %.4f;\n", CALIBRATION_FACTOR);
-  Serial.println("==========================================\n");
-}
-
 // ================== PID KECEPATAN ==================
 void updatePID() {
   static unsigned long lastT = 0;
@@ -457,17 +522,24 @@ void resetCycle() {
   weightCount = 0;
   irClearSeen = false;
   changeState(WAIT_RFID);
-  Serial.println("\n[INFO] Siap! Silakan scan RFID barang.");
+  Serial.println("\n[INFO] Siap! Silakan scan RFID barang (atau ketik 'k' kalibrasi / 't' tare).");
 }
 
 void handleSerialCommand() {
-  if (Serial.available()) {
-    char c = Serial.read();
-    if (c == 't' || c == 'T') {
+  if (Serial.available() > 0) {
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+
+    if (input.equalsIgnoreCase("t")) {
       tareRequested = true;
-    } else if (c == 'k' || c == 'K') {
+    } else if (input.equalsIgnoreCase("k")) {
       runInteractiveCalibration();
       resetCycle();
+    } else if (input.equalsIgnoreCase("w")) {
+      // Cek cepat pembacaan raw & gram saat ini via Serial Monitor
+      long r = bacaRawStabil();
+      float g = getWeightGram();
+      Serial.printf("[CEK] Raw: %ld | Berat: %.1f g | CalFactor: %.4f\n", r, g, CALIBRATION_FACTOR);
     }
   }
 }
@@ -497,10 +569,12 @@ void setup() {
   rfid.PCD_Init();
 
   scale.begin(PIN_HX711_DT, PIN_HX711_SCK);
-  scale.set_scale(CALIBRATION_FACTOR);
+  while (!scale.is_ready()) {
+    Serial.println("[LOADCELL] Menunggu modul HX711 siap...");
+    delay(500);
+  }
   Serial.println("[LOADCELL] Pastikan timbangan KOSONG saat boot untuk tare (nol)...");
-  scale.tare(10);
-  Serial.println("[LOADCELL] Tare selesai.");
+  prosesTare();
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
@@ -532,11 +606,12 @@ void setup() {
   mqtt.setBufferSize(1024);
   mqtt.setSocketTimeout(3);
 
-  Serial.println("==========================================");
-  Serial.println(" Sistem Checkweigher IoT");
-  Serial.println(" Ketik 'k' untuk kalibrasi berat barang.");
-  Serial.println(" Ketik 't' untuk tare (nol) ulang.");
-  Serial.println("==========================================");
+  Serial.println("==================================================");
+  Serial.println(" Sistem Checkweigher IoT (Anti-Spike Filter)");
+  Serial.println(" - Ketik 'k' + Enter : Kalibrasi berat barang");
+  Serial.println(" - Ketik 't' + Enter : Tare (nol-kan) ulang");
+  Serial.println(" - Ketik 'w' + Enter : Cek Raw ADC & Berat saat ini");
+  Serial.println("==================================================");
 
   resetCycle();
 }
@@ -550,9 +625,7 @@ void loop() {
 
   if (tareRequested) {
     tareRequested = false;
-    Serial.println("[LOADCELL] Tare... pastikan timbangan kosong.");
-    scale.tare(10);
-    Serial.println("[LOADCELL] Tare selesai.");
+    prosesTare();
     publishDeviceStatus();
   }
 
@@ -572,7 +645,7 @@ void loop() {
         Serial.print("\n[RFID] Barang terdaftar. UID: ");
         Serial.println(currentUID);
 
-        if (scale.is_ready() && fabs(scale.get_units(1)) > MIN_ITEM_G) {
+        if (scale.is_ready() && fabs(getWeightGram()) > MIN_ITEM_G) {
           Serial.println("[LOADCELL] Barang sudah terdeteksi di timbangan, langsung menimbang...");
           weightSum = 0;
           weightCount = 0;
@@ -589,13 +662,11 @@ void loop() {
       static unsigned long lastDbg = 0;
 
       if (scale.is_ready()) {
-        float w = fabs(scale.get_units(1));
+        float w = fabs(getWeightGram());
 
         if (millis() - lastDbg > 500) {
           lastDbg = millis();
-          Serial.print("[DEBUG] Berat terbaca: ");
-          Serial.print(w);
-          Serial.println(" g");
+          Serial.printf("[DEBUG] Berat terbaca: %.1f g\n", w);
         }
 
         if (w > MIN_ITEM_G) {
@@ -621,7 +692,7 @@ void loop() {
       if (millis() - stateStart < SETTLE_MS) break;
 
       if (scale.is_ready()) {
-        weightSum += fabs(scale.get_units(1));
+        weightSum += fabs(getWeightGram());
         weightCount++;
       }
 
