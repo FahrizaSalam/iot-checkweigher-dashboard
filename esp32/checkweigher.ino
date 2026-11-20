@@ -9,8 +9,8 @@
 #include <math.h>
 
 // ================== WIFI & MQTT ==================
-const char* WIFI_SSID = "HARMONI KOST LT.1";
-const char* WIFI_PASS = "Bitcoin$100k";
+const char* WIFI_SSID = "YTAA";
+const char* WIFI_PASS = "123456789";
 const int   WIFI_CHANNEL = 6;            // Hapus parameter WIFI_CHANNEL di WiFi.begin jika WiFi asli
 
 const char* MQTT_HOST = "broker.hivemq.com";
@@ -47,7 +47,7 @@ const int PIN_HX711_SCK = 17;
 
 // ================== PARAMETER LOADCELL ==================
 // Salin angka hasil kalibrasi ('k') dari Serial Monitor ke baris ini agar permanen:
-float CALIBRATION_FACTOR = 25.0;       
+float CALIBRATION_FACTOR = 11209.3203;       
 const float MIN_ITEM_G        = 5.0;   
 const unsigned long SETTLE_MS = 500;
 const int WEIGHT_SAMPLES      = 10;
@@ -74,7 +74,7 @@ const int PULSES_PER_MOTOR_REV = 11;
 const float GEAR_RATIO = 90.0;
 const float PULSES_PER_SHAFT_REV = PULSES_PER_MOTOR_REV * GEAR_RATIO;
 
-const int freq = 1000;       // 1 kHz (rekomendasi L298N; 30 kHz terlalu tinggi dan menyebabkan voltage drop drastis pada L298N)
+const int freq = 5000;       // 1 kHz (rekomendasi L298N; 30 kHz terlalu tinggi dan menyebabkan voltage drop drastis pada L298N)
 const int resolution = 8;
 const int PWM_MAX = 255;
 
