@@ -1,4 +1,4 @@
-x`#include <WiFi.h>
+#include <WiFi.h>
 #include <PubSubClient.h>   // Library: "PubSubClient" by Nick O'Leary
 #include <SPI.h>
 #include <MFRC522.h>
@@ -52,10 +52,11 @@ const float MIN_ITEM_G        = 5.0;
 const unsigned long SETTLE_MS = 500;
 const int WEIGHT_SAMPLES      = 10;
 
-// ================== THRESHOLD TOLERANSI (SATUAN GRAM) ==================
-float toleranceMin = 150.0;     // Di bawah ini = RINGAN (jalur lurus)
-float toleranceMax = 900.0;    // Di atas ini  = ERROR  (konveyor berhenti)
-                               // Di antara    = BERAT  (servo jalan / belok)
+// ================== THRESHOLD TOLERANSI DEFAULT (SATUAN GRAM) ==================
+// Nilai ini disinkronkan dengan default database web (Product: ToleranceMin 300g, ToleranceMax 1000g)
+float toleranceMin = 300.0;     // Di bawah ini = RINGAN (disortir via servo ke wadah reject/ringan)
+float toleranceMax = 1000.0;    // Di atas ini  = ERROR  (motor konveyor berhenti)
+                                // Di antara    = BERAT  (pass, jalur lurus konveyor)
 
 // ================== PARAMETER SERVO & WAKTU ==================
 const int SERVO_STRAIGHT = 0;
@@ -246,10 +247,8 @@ void mqttCallback(char* topicName, byte* payload, unsigned int len) {
       tareRequested = true;
       Serial.println("[CMD] TARE diterima dari dashboard");
     } else if (cmd == "START") {
-      if (!conveyorRunning && state == WAIT_RFID) {
-        Serial.println("[CMD] START diterima dari dashboard");
-        startConveyor();
-      }
+      Serial.println("[CMD] START diterima dari dashboard");
+      startConveyor();
     } else if (cmd == "STOP") {
       Serial.println("[CMD] STOP diterima dari dashboard");
       resetCycle();
@@ -259,17 +258,19 @@ void mqttCallback(char* topicName, byte* payload, unsigned int len) {
     JsonDocument doc;
     if (deserializeJson(doc, msg) != DeserializationError::Ok) return;
 
-    if (doc["tolerance_min"].is<float>()) toleranceMin = doc["tolerance_min"].as<float>();
-    if (doc["tolerance_max"].is<float>()) toleranceMax = doc["tolerance_max"].as<float>();
-    Serial.printf("[CMD] Threshold update: min=%.1f max=%.1f\n", toleranceMin, toleranceMax);
+    if (!doc["tolerance_min"].isNull()) toleranceMin = doc["tolerance_min"].as<float>();
+    if (!doc["tolerance_max"].isNull()) toleranceMax = doc["tolerance_max"].as<float>();
+    Serial.printf("[CMD] Threshold update dari web: min=%.1f max=%.1f\n", toleranceMin, toleranceMax);
+    publishDeviceStatus();
   }
   else if (t == "checkweigher/config/setpoint") {
     JsonDocument doc;
     if (deserializeJson(doc, msg) != DeserializationError::Ok) return;
 
-    if (doc["setpoint_rpm"].is<float>()) {
+    if (!doc["setpoint_rpm"].isNull()) {
       setpointRPM = constrain(doc["setpoint_rpm"].as<float>(), 0.0, MAX_RPM_LIMIT);
-      Serial.printf("[CMD] Setpoint RPM update: %.2f\n", setpointRPM);
+      Serial.printf("[CMD] Setpoint RPM update dari web: %.2f\n", setpointRPM);
+      publishDeviceStatus();
     }
   }
 }
@@ -287,6 +288,7 @@ void connectMqtt() {
     mqtt.subscribe("checkweigher/config/setpoint");
 
     Serial.println("[MQTT] Subscribe: command, config/threshold, config/setpoint");
+    publishDeviceStatus(); // Kirim status awal ke dashboard segera setelah connect
   } else {
     Serial.printf("gagal, rc=%d\n", mqtt.state());
   }
@@ -546,11 +548,12 @@ void loop() {
   updatePID();
   handleSerialCommand();
 
-  if (tareRequested && state == WAIT_RFID) {
+  if (tareRequested) {
     tareRequested = false;
     Serial.println("[LOADCELL] Tare... pastikan timbangan kosong.");
     scale.tare(10);
     Serial.println("[LOADCELL] Tare selesai.");
+    publishDeviceStatus();
   }
 
   switch (state) {
@@ -637,6 +640,7 @@ void loop() {
                       currentWeightG, currentCategory.c_str());
 
         publishWeighing();
+        publishDeviceStatus();
 
         if (currentCategory == "ERROR") {
           Serial.println("[ERROR] Berat melebihi toleransi maksimum! Konveyor TIDAK dijalankan.");
@@ -666,11 +670,11 @@ void loop() {
     }
 
     case SORTING: {
-      if (currentCategory == "BERAT") {
-        Serial.println("[SERVO] BERAT -> servo 90 derajat (belok ke wadah sortir).");
+      if (currentCategory == "RINGAN") {
+        Serial.println("[SERVO] RINGAN -> servo 90 derajat (belok ke wadah sortir).");
         sortingServo.write(SERVO_DIVERT);
       } else {
-        Serial.println("[SERVO] RINGAN -> servo tetap (jalur lurus).");
+        Serial.println("[SERVO] BERAT -> servo tetap (jalur lurus).");
         sortingServo.write(SERVO_STRAIGHT);
       }
       irClearSeen = false;
