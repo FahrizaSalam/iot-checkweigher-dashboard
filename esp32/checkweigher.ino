@@ -74,7 +74,7 @@ const int PULSES_PER_MOTOR_REV = 11;
 const float GEAR_RATIO = 90.0;
 const float PULSES_PER_SHAFT_REV = PULSES_PER_MOTOR_REV * GEAR_RATIO;
 
-const int freq = 30000;
+const int freq = 1000;       // 1 kHz (rekomendasi L298N; 30 kHz terlalu tinggi dan menyebabkan voltage drop drastis pada L298N)
 const int resolution = 8;
 const int PWM_MAX = 255;
 
@@ -559,7 +559,25 @@ void loop() {
   switch (state) {
 
     case WAIT_RFID: {
+      static unsigned long lastScaleWarn = 0;
+      bool scaleHasItem = (scale.is_ready() && fabs(scale.get_units(1)) > MIN_ITEM_G);
+
+      // Jika ada beban di atas timbangan sebelum scan RFID, ingatkan operator untuk mengangkat barang
+      if (scaleHasItem && (millis() - lastScaleWarn > 2000)) {
+        lastScaleWarn = millis();
+        Serial.println("[PERINGATAN] Ada barang di atas timbangan! Angkat barang terlebih dahulu sebelum scan RFID.");
+      }
+
       if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+        // Validasi urutan: Jika barang ditaruh duluan di timbangan, tolak proses dan suruh angkat barang
+        if (scale.is_ready() && fabs(scale.get_units(1)) > MIN_ITEM_G) {
+          Serial.println("\n[DITOLAK] Barang sudah ada di timbangan!");
+          Serial.println("[INSTRUKSI] Angkat barang dari timbangan terlebih dahulu, lalu scan RFID ulang dalam kondisi timbangan kosong.");
+          rfid.PICC_HaltA();
+          rfid.PCD_StopCrypto1();
+          break;
+        }
+
         currentUID = "";
         for (byte i = 0; i < rfid.uid.size; i++) {
           if (rfid.uid.uidByte[i] < 0x10) currentUID += "0";
@@ -569,18 +587,10 @@ void loop() {
         rfid.PICC_HaltA();
         rfid.PCD_StopCrypto1();
 
-        Serial.print("\n[RFID] Barang terdaftar. UID: ");
+        Serial.print("\n[RFID] Scan berhasil! UID: ");
         Serial.println(currentUID);
-
-        if (scale.is_ready() && fabs(scale.get_units(1)) > MIN_ITEM_G) {
-          Serial.println("[LOADCELL] Barang sudah terdeteksi di timbangan, langsung menimbang...");
-          weightSum = 0;
-          weightCount = 0;
-          changeState(WEIGHING);
-        } else {
-          Serial.println("[INFO] Silakan letakkan barang di loadcell...");
-          changeState(WAIT_ITEM_ON_SCALE);
-        }
+        Serial.println("[INFO] Silakan letakkan barang di atas timbangan (loadcell)...");
+        changeState(WAIT_ITEM_ON_SCALE);
       }
       break;
     }
