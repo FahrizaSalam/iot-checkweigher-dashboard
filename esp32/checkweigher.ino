@@ -1,481 +1,703 @@
-/*
-  IoT Checkweigher ESP32 Firmware Reference
-  
-  Komponen:
-  - ESP32 Dev Module
-  - LoadCell + HX711 (DT: GPIO 16, SCK: GPIO 4)
-  - Rotary Encoder (CLK: GPIO 34, DT: GPIO 35)
-  - Infrared Sensor (OUT: GPIO 14)
-  - RFID RC522 (SDA/SS: GPIO 5, SCK: GPIO 18, MOSI: GPIO 23, MISO: GPIO 19, RST: GPIO 22)
-  - Servo Motor (PWM: GPIO 13)
-  - Motor Driver L298N / BTS7960 (PWM: GPIO 25, DIR1: GPIO 26, DIR2: GPIO 27)
-
-  Fitur:
-  - Koneksi WiFi dan MQTT ke HiveMQ Cloud (TLS / Port 8883)
-  - Scan RFID tag pada barang
-  - Deteksi keberadaan barang via sensor Infrared
-  - Penimbangan berat barang via LoadCell HX711
-  - Klasifikasi 3 kategori:
-      * RINGAN (< 300g)       -> Servo belokkan barang ke jalur sortir
-      * BERAT (300g - 1000g)  -> Conveyor jalan lurus (servo posisi normal)
-      * ERROR (> 1000g)       -> Motor conveyor stop + kirim alert
-  - Pengaturan kecepatan motor conveyor dengan kontrol PID berbasis Rotary Encoder
-  - Menerima perintah MQTT dari dashboard:
-      * checkweigher/command          : START, STOP, TARE
-      * checkweigher/config/threshold  : tolerance_min, tolerance_max
-      * checkweigher/config/setpoint   : setpoint_rpm
-  - Mengirim data ke broker MQTT:
-      * checkweigher/weighing         : hasil penimbangan + UID RFID
-      * checkweigher/conveyor/rpm      : telemetri PID (actual RPM & PWM)
-      * checkweigher/device/status     : status heartbeat sensor & aktuator
-*/
-
-#include <WiFi.h>
-#include <WiFiClient.h>
-#include <PubSubClient.h>
-#include <ArduinoJson.h>
+x`#include <WiFi.h>
+#include <PubSubClient.h>   // Library: "PubSubClient" by Nick O'Leary
 #include <SPI.h>
 #include <MFRC522.h>
 #include <ESP32Servo.h>
-#include "HX711.h"
+#include <HX711.h>          // Library: "HX711" by Bogdan Necula (bogde)
+#include <ArduinoJson.h>    // Library: "ArduinoJson" by Benoit Blanchon
+#include <time.h>
+#include <math.h>
 
-// ================= KONFIGURASI WIFI & HIVEMQ =================
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASS     = "YOUR_WIFI_PASSWORD";
+// ================== WIFI & MQTT ==================
+const char* WIFI_SSID = "HARMONI KOST LT.1";
+const char* WIFI_PASS = "Bitcoin$100k";
+const int   WIFI_CHANNEL = 6;            // Hapus parameter WIFI_CHANNEL di WiFi.begin jika WiFi asli
 
-// Konfigurasi Broker Public HiveMQ (broker.hivemq.com port 1883 TCP / 8883 TLS)
-const char* MQTT_BROKER   = "broker.hivemq.com";
-const int   MQTT_PORT     = 1883; // 1883 untuk unencrypted (public), 8883 untuk TLS
-const char* MQTT_USER     = "";   // Kosongkan untuk broker public
-const char* MQTT_PASS     = "";   // Kosongkan untuk broker public
-const char* CLIENT_ID     = "ESP32-Checkweigher-Client";
+const char* MQTT_HOST = "broker.hivemq.com";
+const int   MQTT_PORT = 1883;
 
-// Topik MQTT
-const char* TOPIC_WEIGHING         = "checkweigher/weighing";
-const char* TOPIC_DEVICE_STATUS    = "checkweigher/device/status";
-const char* TOPIC_CONVEYOR_RPM     = "checkweigher/conveyor/rpm";
-const char* TOPIC_COMMAND          = "checkweigher/command";
-const char* TOPIC_CONFIG_THRESHOLD = "checkweigher/config/threshold";
-const char* TOPIC_CONFIG_SETPOINT  = "checkweigher/config/setpoint";
+const char* NTP_SERVER = "pool.ntp.org";
+const long  GMT_OFFSET = 25200;  // WIB = UTC+7
+bool ntpSynced = false;
 
-// ================= PIN DEFINITIONS =================
-#define PIN_HX711_DOUT   16
-#define PIN_HX711_SCK    4
+WiFiClient wifiClient;
+PubSubClient mqtt(wifiClient);
 
-#define PIN_RFID_SS      5
-#define PIN_RFID_RST     22
+// ================== KONFIGURASI PIN ==================
+const int ENA = 25;   // PWM motor (L298N)
+const int IN1 = 26;
+const int IN2 = 33;
 
-#define PIN_IR_SENSOR    14
-#define PIN_SERVO        13
+const int ENC_A = 4;
+const int ENC_B = 32;
 
-#define PIN_ENC_CLK      34
-#define PIN_ENC_DT       35
+const int PIN_IR_SENSOR = 27;
+const int IR_ACTIVE_STATE = LOW;  // Ganti LOW jika modul IR aktif-LOW
 
-#define PIN_MOTOR_PWM    25
-#define PIN_MOTOR_DIR1   26
-#define PIN_MOTOR_DIR2   27
+const int PIN_SERVO = 13;
 
-// ================= OBJEK PERANGKAT =================
-// Catatan: Gunakan WiFiClient untuk port 1883 (standar public), atau WiFiClientSecure untuk TLS (port 8883)
-WiFiClient net;
-PubSubClient mqttClient(net);
-HX711 scale;
-MFRC522 rfid(PIN_RFID_SS, PIN_RFID_RST);
-Servo sortServo;
+const int PIN_RFID_SS   = 5;
+const int PIN_RFID_SCK  = 18;
+const int PIN_RFID_MISO = 19;
+const int PIN_RFID_MOSI = 23;
+const int PIN_RFID_RST  = 22;
 
-// ================= PARAMETER SISTEM =================
-float toleranceMin = 300.0;    // Batas bawah kategori berat (gram)
-float toleranceMax = 1000.0;   // Batas atas sebelum error (gram)
-float setpointRPM  = 60.0;     // Target kecepatan konveyor (RPM)
+const int PIN_HX711_DT  = 16;
+const int PIN_HX711_SCK = 17;
 
-bool conveyorRunning = true;
-bool systemActive    = true;
+// ================== PARAMETER LOADCELL ==================
+// Salin angka hasil kalibrasi ('k') dari Serial Monitor ke baris ini agar permanen:
+float CALIBRATION_FACTOR = 25.0;       
+const float MIN_ITEM_G        = 5.0;   
+const unsigned long SETTLE_MS = 500;
+const int WEIGHT_SAMPLES      = 10;
 
-// Posisi Servo
-const int SERVO_STRAIGHT = 0;   // Posisi lurus untuk BERAT
-const int SERVO_SORT     = 90;  // Posisi belok untuk RINGAN
+// ================== THRESHOLD TOLERANSI (SATUAN GRAM) ==================
+float toleranceMin = 150.0;     // Di bawah ini = RINGAN (jalur lurus)
+float toleranceMax = 900.0;    // Di atas ini  = ERROR  (konveyor berhenti)
+                               // Di antara    = BERAT  (servo jalan / belok)
 
-// PID Control Parameter
+// ================== PARAMETER SERVO & WAKTU ==================
+const int SERVO_STRAIGHT = 0;
+const int SERVO_DIVERT   = 90;
+
+const unsigned long TIMEOUT_ITEM_ON_SCALE = 15000;
+const unsigned long TIMEOUT_TRAVEL        = 20000;
+const unsigned long TIMEOUT_CLEAR         = 15000;
+const unsigned long CLEAR_DELAY_MS        = 600;
+const unsigned long SERVO_MIN_HOLD_MS     = 2000;
+
+// ================== ENCODER & MOTOR ==================
+volatile long encoderValue = 0;
+const int PULSES_PER_MOTOR_REV = 11;
+const float GEAR_RATIO = 90.0;
+const float PULSES_PER_SHAFT_REV = PULSES_PER_MOTOR_REV * GEAR_RATIO;
+
+const int freq = 30000;
+const int resolution = 8;
+const int PWM_MAX = 255;
+
+// ================== PID KECEPATAN ==================
+float setpointRPM = 60.0;
+const float MAX_RPM_LIMIT = 200.0;
+
 float Kp = 2.0;
-float Ki = 0.5;
-float Kd = 0.1;
+float Ki = 5.0;
+float Kd = 0.05;
 
-float pidError = 0, lastError = 0, integralError = 0, derivativeError = 0;
-int motorPWM = 0;
+const unsigned long PID_INTERVAL_MS = 100;
+const float RPM_FILTER_ALPHA = 0.3;
+const float PWM_START = 120.0;
 
-// Encoder Variables
-volatile long encoderTicks = 0;
-unsigned long lastPIDTime = 0;
-float currentRPM = 0.0;
-const int ENCODER_PULSES_PER_REV = 20;
+float rpmFiltered = 0;
+float pidIntegral = 0;
+float pidPrevMeas = 0;
+int   pwmOut = 0;
 
-// Heartbeat & Telemetry Timer
-unsigned long lastHeartbeat = 0;
-unsigned long lastRPMTele   = 0;
+// ================== OBJEK ==================
+MFRC522 rfid(PIN_RFID_SS, PIN_RFID_RST);
+Servo sortingServo;
+HX711 scale;
 
-// State RFID
-String scannedRFID = "";
+// ================== STATE MACHINE ==================
+enum State {
+  WAIT_RFID,
+  WAIT_ITEM_ON_SCALE,
+  WEIGHING,
+  CONVEYOR_RUN,
+  SORTING,
+  WAIT_CLEAR
+};
+const char* STATE_NAMES[] = {
+  "WAIT_RFID", "WAIT_ITEM_ON_SCALE", "WEIGHING",
+  "CONVEYOR_RUN", "SORTING", "WAIT_CLEAR"
+};
 
-// ================= INTERRUPT SERVICE ROUTINE =================
-void IRAM_ATTR onEncoderPulse() {
-  encoderTicks++;
+State state = WAIT_RFID;
+unsigned long stateStart = 0;
+
+String currentUID = "";
+float currentWeightG = 0;
+String currentCategory = "";
+bool conveyorRunning = false;
+
+float weightSum = 0;
+int weightCount = 0;
+
+bool irClearSeen = false;
+unsigned long irClearTime = 0;
+
+bool tareRequested = false;
+
+// ================== TIMESTAMP HELPER ==================
+String getTimestamp() {
+  if (!ntpSynced) return "";
+  struct tm t;
+  if (!getLocalTime(&t)) return "";
+  char buf[30];
+  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S+07:00", &t);
+  return String(buf);
 }
 
-// ================= SETUP PERANGKAT =================
-void setup() {
-  Serial.begin(115200);
-  Serial.println("[SYSTEM] Inisialisasi Checkweigher ESP32...");
-
-  // Setup Pin Motor
-  pinMode(PIN_MOTOR_PWM, OUTPUT);
-  pinMode(PIN_MOTOR_DIR1, OUTPUT);
-  pinMode(PIN_MOTOR_DIR2, OUTPUT);
-  digitalWrite(PIN_MOTOR_DIR1, HIGH);
-  digitalWrite(PIN_MOTOR_DIR2, LOW);
-
-  // Setup Pin IR & Encoder
-  pinMode(PIN_IR_SENSOR, INPUT);
-  pinMode(PIN_ENC_CLK, INPUT_PULLUP);
-  pinMode(PIN_ENC_DT, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENC_CLK), onEncoderPulse, RISING);
-
-  // Setup Servo
-  sortServo.attach(PIN_SERVO);
-  sortServo.write(SERVO_STRAIGHT);
-
-  // Setup SPI & RFID
-  SPI.begin();
-  rfid.PCD_Init();
-  Serial.println("[RFID] RC522 Reader siap");
-
-  // Setup Loadcell HX711
-  scale.begin(PIN_HX711_DOUT, PIN_HX711_SCK);
-  scale.set_scale(420.0983); // Kalibrasi faktor sesuai sensor Anda
-  scale.tare();              // Reset ke 0 gram saat startup
-  Serial.println("[LOADCELL] HX711 siap dan di-tare");
-
-  // Koneksi WiFi
-  setupWiFi();
-
-  // Konfigurasi MQTT (jika memakai WiFiClientSecure untuk TLS port 8883, gunakan net.setInsecure())
-  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
-  mqttClient.setCallback(onMqttMessageReceived);
-  mqttClient.setBufferSize(1024);
-
-  connectMQTT();
-}
-
-// ================= MAIN LOOP =================
-void loop() {
-  if (!mqttClient.connected()) {
-    connectMQTT();
-  }
-  mqttClient.loop();
-
-  unsigned long now = millis();
-
-  // 1. Baca RFID jika ada kartu/tag mendekat
-  readRFIDTag();
-
-  // 2. Loop Kontrol PID Conveyor (setiap 100ms)
-  if (now - lastPIDTime >= 100) {
-    calculatePID();
-    lastPIDTime = now;
-  }
-
-  // 3. Cek Sensor IR untuk mendeteksi kehadiran barang di zona timbang
-  if (systemActive && digitalRead(PIN_IR_SENSOR) == LOW) { // Asumsi Active LOW saat objek ada
-    handleWeighingProcess();
-  }
-
-  // 4. Kirim Telemetri RPM ke MQTT setiap 500ms
-  if (now - lastRPMTele >= 500) {
-    sendRPMTelemetry();
-    lastRPMTele = now;
-  }
-
-  // 5. Kirim Heartbeat Status Device setiap 5000ms (5 detik)
-  if (now - lastHeartbeat >= 5000) {
-    sendDeviceStatus();
-    lastHeartbeat = now;
+// ================== MQTT PUBLISH ==================
+void mqttPublish(const char* topic, const char* payload, bool retain = false) {
+  if (mqtt.connected()) {
+    mqtt.publish(topic, payload, retain);
   }
 }
 
-// ================= PROSES PENIMBANGAN =================
-void handleWeighingProcess() {
-  Serial.println("[WEIGH] Barang terdeteksi oleh Sensor IR di zona timbang");
+void publishWeighing() {
+  JsonDocument doc;
+  doc["rfid_uid"] = currentUID;
+  doc["weight"] = currentWeightG;
+  doc["conveyor_speed"] = rpmFiltered;
+  String ts = getTimestamp();
+  if (ts.length() > 0) doc["timestamp"] = ts;
 
-  // Hentikan konveyor sejenak untuk menimbang stabil
-  setMotorSpeed(0);
-  delay(300);
-
-  // Baca berat dari loadcell (rata-rata 5 pembacaan)
-  float weight = scale.get_units(5);
-  if (weight < 0) weight = 0.0;
-
-  Serial.printf("[WEIGH] Berat terukur: %.2f gram\n", weight);
-
-  String category = "BERAT";
-
-  if (weight > toleranceMax) {
-    // Kategori: ERROR (> 1000g)
-    category = "ERROR";
-    Serial.println("[WEIGH] ALERT: Berat melebihi kapasitas (>1000g)! Conveyor dihentikan.");
-    conveyorRunning = false;
-    setMotorSpeed(0);
-  } else if (weight < toleranceMin) {
-    // Kategori: RINGAN (< 300g) -> Belokkan ke jalur sortir
-    category = "RINGAN";
-    Serial.println("[WEIGH] Kategori: RINGAN. Menggerakkan Servo ke posisi sortir...");
-    sortServo.write(SERVO_SORT);
-    delay(400);
-
-    // Jalankan konveyor untuk mendorong barang ke jalur sortir
-    setMotorSpeed(motorPWM);
-    delay(1200);
-
-    // Kembalikan servo ke posisi lurus
-    sortServo.write(SERVO_STRAIGHT);
-  } else {
-    // Kategori: BERAT (300g - 1000g) -> Lurus
-    category = "BERAT";
-    Serial.println("[WEIGH] Kategori: BERAT. Melanjutkan konveyor lurus...");
-    sortServo.write(SERVO_STRAIGHT);
-    setMotorSpeed(motorPWM);
-    delay(1000);
-  }
-
-  // Kirim data penimbangan ke MQTT
-  sendWeighingData(weight, currentRPM);
-
-  // Reset tag RFID setelah selesai proses penimbangan barang tersebut
-  scannedRFID = "";
-
-  // Nyalakan kembali conveyor jika tidak error
-  if (conveyorRunning) {
-    setMotorSpeed(motorPWM);
-  }
+  char buf[256];
+  serializeJson(doc, buf, sizeof(buf));
+  mqttPublish("checkweigher/weighing", buf);
+  Serial.printf("[MQTT] Publish weighing: %s\n", buf);
 }
 
-// ================= BACA RFID TAG =================
-void readRFIDTag() {
-  if (!rfid.PICC_IsNewCardPresent()) return;
-  if (!rfid.PICC_ReadCardSerial()) return;
+void publishConveyorRPM() {
+  JsonDocument doc;
+  doc["actual_rpm"] = rpmFiltered;
+  doc["pwm_value"] = pwmOut;
+  String ts = getTimestamp();
+  if (ts.length() > 0) doc["timestamp"] = ts;
 
-  String uidStr = "";
-  for (byte i = 0; i < rfid.uid.size; i++) {
-    if (rfid.uid.uidByte[i] < 0x10) uidStr += "0";
-    uidStr += String(rfid.uid.uidByte[i], HEX);
-  }
-  uidStr.toUpperCase();
-  scannedRFID = uidStr;
-
-  Serial.print("[RFID] Tag terdeteksi. UID: ");
-  Serial.println(scannedRFID);
-
-  rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
+  char buf[200];
+  serializeJson(doc, buf, sizeof(buf));
+  mqttPublish("checkweigher/conveyor/rpm", buf);
 }
 
-// ================= KONTROL PID MOTOR CONVEYOR =================
-void calculatePID() {
-  if (!conveyorRunning) {
-    setMotorSpeed(0);
-    currentRPM = 0.0;
-    encoderTicks = 0;
-    return;
-  }
-
-  // Hitung RPM aktual dari encoder
-  long ticks = encoderTicks;
-  encoderTicks = 0;
-
-  // 100ms = 0.1 detik. (ticks / pulse_per_rev) / (0.1 / 60)
-  currentRPM = ((float)ticks / ENCODER_PULSES_PER_REV) * 600.0;
-
-  // Hitung Error PID
-  pidError = setpointRPM - currentRPM;
-  integralError += pidError * 0.1;
-  derivativeError = (pidError - lastError) / 0.1;
-
-  float output = (Kp * pidError) + (Ki * integralError) + (Kd * derivativeError);
-  motorPWM = constrain((int)output + 120, 0, 255); // Basis offset 120 untuk overcome friksi
-
-  lastError = pidError;
-  setMotorSpeed(motorPWM);
-}
-
-void setMotorSpeed(int pwm) {
-  analogWrite(PIN_MOTOR_PWM, pwm);
-}
-
-// ================= PENGIRIMAN MQTT DATA =================
-void sendWeighingData(float weight, float speed) {
-  StaticJsonDocument<256> doc;
-  doc["rfid_uid"]       = scannedRFID.length() > 0 ? scannedRFID : "UNKNOWN";
-  doc["weight"]         = weight;
-  doc["unit"]           = "gram";
-  doc["conveyor_speed"] = speed;
-  doc["timestamp"]      = "";
-
-  char buffer[256];
-  serializeJson(doc, buffer);
-  mqttClient.publish(TOPIC_WEIGHING, buffer);
-  Serial.printf("[MQTT PUB] Weighing data terkirim: %s\n", buffer);
-}
-
-void sendRPMTelemetry() {
-  StaticJsonDocument<128> doc;
-  doc["actual_rpm"] = currentRPM;
-  doc["pwm_value"]  = motorPWM;
-  doc["timestamp"]  = "";
-
-  char buffer[128];
-  serializeJson(doc, buffer);
-  mqttClient.publish(TOPIC_CONVEYOR_RPM, buffer);
-}
-
-void sendDeviceStatus() {
-  StaticJsonDocument<512> doc;
+void publishDeviceStatus() {
+  JsonDocument doc;
   JsonArray arr = doc.to<JsonArray>();
 
-  JsonObject lc = arr.createNestedObject();
-  lc["device_name"] = "LoadCell HX711";
-  lc["device_type"] = "loadcell";
-  lc["status"]      = scale.is_ready() ? "ONLINE" : "ERROR";
-  lc["last_value"]  = String(scale.get_units(1), 1) + " g";
+  JsonObject d1 = arr.add<JsonObject>();
+  d1["device_name"] = "LoadCell HX711";
+  d1["device_type"] = "loadcell";
+  d1["status"] = scale.is_ready() ? "ONLINE" : "OFFLINE";
+  char wBuf[16];
+  snprintf(wBuf, sizeof(wBuf), "%.1f g", currentWeightG);
+  d1["last_value"] = wBuf;
 
-  JsonObject enc = arr.createNestedObject();
-  enc["device_name"] = "Rotary Encoder";
-  enc["device_type"] = "encoder";
-  enc["status"]      = "ONLINE";
-  enc["last_value"]  = String(currentRPM, 1) + " RPM";
+  JsonObject d2 = arr.add<JsonObject>();
+  d2["device_name"] = "Rotary Encoder";
+  d2["device_type"] = "encoder";
+  d2["status"] = "ONLINE";
+  char rBuf[16];
+  snprintf(rBuf, sizeof(rBuf), "%.1f RPM", rpmFiltered);
+  d2["last_value"] = rBuf;
 
-  JsonObject srv = arr.createNestedObject();
-  srv["device_name"] = "Servo SG90";
-  srv["device_type"] = "servo";
-  srv["status"]      = "ONLINE";
-  srv["last_value"]  = String(sortServo.read()) + " deg";
+  JsonObject d3 = arr.add<JsonObject>();
+  d3["device_name"] = "Servo SG90";
+  d3["device_type"] = "servo";
+  d3["status"] = "ONLINE";
+  char sBuf[16];
+  snprintf(sBuf, sizeof(sBuf), "%d deg", sortingServo.read());
+  d3["last_value"] = sBuf;
 
-  JsonObject ir = arr.createNestedObject();
-  ir["device_name"] = "IR Sensor";
-  ir["device_type"] = "infrared";
-  ir["status"]      = "ONLINE";
-  ir["last_value"]  = digitalRead(PIN_IR_SENSOR) == LOW ? "TRIGGERED" : "IDLE";
+  JsonObject d4 = arr.add<JsonObject>();
+  d4["device_name"] = "IR Sensor";
+  d4["device_type"] = "infrared";
+  d4["status"] = "ONLINE";
+  d4["last_value"] = irDetected() ? "DETECTED" : "IDLE";
 
-  JsonObject mot = arr.createNestedObject();
-  mot["device_name"] = "DC Motor";
-  mot["device_type"] = "motor";
-  mot["status"]      = conveyorRunning ? "ONLINE" : "OFFLINE";
-  mot["last_value"]  = "PWM: " + String(motorPWM);
+  JsonObject d5 = arr.add<JsonObject>();
+  d5["device_name"] = "DC Motor";
+  d5["device_type"] = "motor";
+  d5["status"] = "ONLINE";
+  char mBuf[16];
+  snprintf(mBuf, sizeof(mBuf), "PWM: %d", pwmOut);
+  d5["last_value"] = mBuf;
 
-  JsonObject rf = arr.createNestedObject();
-  rf["device_name"] = "RFID Reader";
-  rf["device_type"] = "rfid";
-  rf["status"]      = "ONLINE";
-  rf["last_value"]  = scannedRFID.length() > 0 ? scannedRFID : "IDLE";
+  JsonObject d6 = arr.add<JsonObject>();
+  d6["device_name"] = "RFID Reader";
+  d6["device_type"] = "rfid";
+  d6["status"] = "ONLINE";
+  d6["last_value"] = currentUID.length() > 0 ? currentUID.c_str() : "IDLE";
 
-  char buffer[512];
-  serializeJson(doc, buffer);
-  mqttClient.publish(TOPIC_DEVICE_STATUS, buffer);
+  char out[800];
+  serializeJson(doc, out, sizeof(out));
+  mqttPublish("checkweigher/device/status", out);
 }
 
-// ================= PENANGANAN PESAN MQTT (INCOMING) =================
-void onMqttMessageReceived(char* topic, byte* payload, unsigned int length) {
-  String message = "";
-  for (unsigned int i = 0; i < length; i++) {
-    message += (char)payload[i];
-  }
-  Serial.printf("[MQTT RECV] [%s] %s\n", topic, message.c_str());
+// ================== MQTT CALLBACK ==================
+void mqttCallback(char* topicName, byte* payload, unsigned int len) {
+  char msg[256];
+  unsigned int n = len < sizeof(msg) - 1 ? len : sizeof(msg) - 1;
+  memcpy(msg, payload, n);
+  msg[n] = '\0';
 
-  StaticJsonDocument<256> doc;
-  DeserializationError error = deserializeJson(doc, message);
-  if (error) {
-    Serial.println("[MQTT] Gagal parse JSON incoming");
+  String t = String(topicName);
+  Serial.printf("[MQTT] Pesan masuk topik=%s payload=%s\n", topicName, msg);
+
+  if (t == "checkweigher/command") {
+    JsonDocument doc;
+    if (deserializeJson(doc, msg) != DeserializationError::Ok) return;
+
+    String cmd = doc["command"].as<String>();
+    cmd.toUpperCase();
+
+    if (cmd == "TARE") {
+      tareRequested = true;
+      Serial.println("[CMD] TARE diterima dari dashboard");
+    } else if (cmd == "START") {
+      if (!conveyorRunning && state == WAIT_RFID) {
+        Serial.println("[CMD] START diterima dari dashboard");
+        startConveyor();
+      }
+    } else if (cmd == "STOP") {
+      Serial.println("[CMD] STOP diterima dari dashboard");
+      resetCycle();
+    }
+  }
+  else if (t == "checkweigher/config/threshold") {
+    JsonDocument doc;
+    if (deserializeJson(doc, msg) != DeserializationError::Ok) return;
+
+    if (doc["tolerance_min"].is<float>()) toleranceMin = doc["tolerance_min"].as<float>();
+    if (doc["tolerance_max"].is<float>()) toleranceMax = doc["tolerance_max"].as<float>();
+    Serial.printf("[CMD] Threshold update: min=%.1f max=%.1f\n", toleranceMin, toleranceMax);
+  }
+  else if (t == "checkweigher/config/setpoint") {
+    JsonDocument doc;
+    if (deserializeJson(doc, msg) != DeserializationError::Ok) return;
+
+    if (doc["setpoint_rpm"].is<float>()) {
+      setpointRPM = constrain(doc["setpoint_rpm"].as<float>(), 0.0, MAX_RPM_LIMIT);
+      Serial.printf("[CMD] Setpoint RPM update: %.2f\n", setpointRPM);
+    }
+  }
+}
+
+// ================== MQTT CONNECT ==================
+void connectMqtt() {
+  String clientId = "esp32-checkweigher-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+
+  Serial.print("[MQTT] Menghubungkan ke broker... ");
+  if (mqtt.connect(clientId.c_str())) {
+    Serial.println("terhubung.");
+
+    mqtt.subscribe("checkweigher/command");
+    mqtt.subscribe("checkweigher/config/threshold");
+    mqtt.subscribe("checkweigher/config/setpoint");
+
+    Serial.println("[MQTT] Subscribe: command, config/threshold, config/setpoint");
+  } else {
+    Serial.printf("gagal, rc=%d\n", mqtt.state());
+  }
+}
+
+void mqttLoop() {
+  static unsigned long lastTry = 0;
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  if (!mqtt.connected()) {
+    if (millis() - lastTry > 5000) {
+      lastTry = millis();
+      connectMqtt();
+    }
+  } else {
+    mqtt.loop();
+  }
+}
+
+void telemetryLoop() {
+  static unsigned long lastRPM = 0;
+  unsigned long rpmInterval = conveyorRunning ? 1000 : 5000;
+  if (millis() - lastRPM >= rpmInterval) {
+    lastRPM = millis();
+    publishConveyorRPM();
+  }
+
+  static unsigned long lastHeartbeat = 0;
+  if (millis() - lastHeartbeat >= 10000) {
+    lastHeartbeat = millis();
+    publishDeviceStatus();
+  }
+}
+
+// ================== INTERRUPT ENCODER ==================
+void IRAM_ATTR handleEncoder() {
+  if (digitalRead(ENC_B) > 0) encoderValue++;
+  else encoderValue--;
+}
+
+// ================== FUNGSI BANTU ==================
+void changeState(State s) {
+  state = s;
+  stateStart = millis();
+  Serial.printf("[STATE] -> %s\n", STATE_NAMES[s]);
+}
+
+bool irDetected() {
+  return digitalRead(PIN_IR_SENSOR) == IR_ACTIVE_STATE;
+}
+
+void startConveyor() {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  pidIntegral = PWM_START;
+  pidPrevMeas = rpmFiltered;
+  pwmOut = (int)PWM_START;
+  ledcWrite(ENA, pwmOut);
+  conveyorRunning = true;
+}
+
+void stopConveyor() {
+  ledcWrite(ENA, 0);
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  pwmOut = 0;
+  pidIntegral = 0;
+  conveyorRunning = false;
+}
+
+String determineCategory(float weight) {
+  if (weight < toleranceMin) return "RINGAN";
+  if (weight > toleranceMax) return "ERROR";
+  return "BERAT";
+}
+
+// ================== KALIBRASI INTERAKTIF VIA SERIAL ==================
+void runInteractiveCalibration() {
+  stopConveyor();
+  Serial.println("\n==========================================");
+  Serial.println("[KALIBRASI] Mode Kalibrasi LoadCell HX711");
+  Serial.println("Langkah 1: KOSONGKAN timbangan sekarang!");
+  Serial.println("Menunggu 3 detik untuk mengenolkan (Tare)...");
+  delay(3000);
+
+  scale.set_scale(); // Reset faktor skala ke 1
+  scale.tare(15);
+  Serial.println("[KALIBRASI] Tare selesai (Titik 0 terkunci).");
+  Serial.println("\nLangkah 2: Letakkan barang uji di atas timbangan,");
+  Serial.println("lalu KETIK berat barang tersebut dalam gram (contoh: 20 atau 30) dan tekan ENTER:");
+
+  while (Serial.available()) Serial.read();
+
+  while (!Serial.available()) {
+    delay(50);
+  }
+  float knownWeight = Serial.parseFloat();
+  while (Serial.available()) Serial.read();
+
+  if (knownWeight <= 0) {
+    Serial.println("[KALIBRASI] Input tidak valid, kalibrasi dibatalkan.");
+    scale.set_scale(CALIBRATION_FACTOR);
     return;
   }
 
-  // 1. Perintah Command (START / STOP / TARE)
-  if (strcmp(topic, TOPIC_COMMAND) == 0) {
-    const char* cmd = doc["command"];
-    if (cmd) {
-      if (strcmp(cmd, "START") == 0) {
-        conveyorRunning = true;
-        systemActive = true;
-        Serial.println("[COMMAND] Conveyor Dimulai (START)");
-      } else if (strcmp(cmd, "STOP") == 0) {
-        conveyorRunning = false;
-        setMotorSpeed(0);
-        Serial.println("[COMMAND] Conveyor Dihentikan (STOP)");
-      } else if (strcmp(cmd, "TARE") == 0) {
-        scale.tare();
-        Serial.println("[COMMAND] Loadcell di-TARE ke 0.0g");
-      }
-    }
-  }
+  Serial.printf("[KALIBRASI] Mengukur nilai sensor untuk beban %.1f g...\n", knownWeight);
+  delay(1000);
+  float rawValue = scale.get_units(20);
 
-  // 2. Update Threshold Konfigurasi
-  else if (strcmp(topic, TOPIC_CONFIG_THRESHOLD) == 0) {
-    if (doc.containsKey("tolerance_min") && doc.containsKey("tolerance_max")) {
-      toleranceMin = doc["tolerance_min"];
-      toleranceMax = doc["tolerance_max"];
-      Serial.printf("[CONFIG] Threshold diperbarui: Min=%.1fg, Max=%.1fg\n", toleranceMin, toleranceMax);
-    }
-  }
+  CALIBRATION_FACTOR = rawValue / knownWeight;
+  scale.set_scale(CALIBRATION_FACTOR);
 
-  // 3. Update Setpoint RPM
-  else if (strcmp(topic, TOPIC_CONFIG_SETPOINT) == 0) {
-    if (doc.containsKey("setpoint_rpm")) {
-      setpointRPM = doc["setpoint_rpm"];
-      Serial.printf("[CONFIG] Setpoint RPM diperbarui: %.1f RPM\n", setpointRPM);
+  Serial.println("------------------------------------------");
+  Serial.printf("Raw Sensor Value   : %.2f\n", rawValue);
+  Serial.printf("CALIBRATION_FACTOR : %.4f\n", CALIBRATION_FACTOR);
+  Serial.printf("Hasil Cek Timbang  : %.2f g\n", scale.get_units(10));
+  Serial.println("------------------------------------------");
+  Serial.println("SALIN baris berikut ke kode Anda agar tersimpan permanen:");
+  Serial.printf("float CALIBRATION_FACTOR = %.4f;\n", CALIBRATION_FACTOR);
+  Serial.println("==========================================\n");
+}
+
+// ================== PID KECEPATAN ==================
+void updatePID() {
+  static unsigned long lastT = 0;
+  static long lastPulses = 0;
+
+  unsigned long now = millis();
+  if (now - lastT < PID_INTERVAL_MS) return;
+  float dt = (now - lastT) / 1000.0;
+  lastT = now;
+
+  noInterrupts();
+  long pulses = encoderValue;
+  interrupts();
+  long delta = pulses - lastPulses;
+  lastPulses = pulses;
+
+  float rpmRaw = ((float)abs(delta) / PULSES_PER_SHAFT_REV) / dt * 60.0;
+  rpmFiltered = RPM_FILTER_ALPHA * rpmRaw + (1.0 - RPM_FILTER_ALPHA) * rpmFiltered;
+
+  if (!conveyorRunning) return;
+
+  float error = setpointRPM - rpmFiltered;
+  float pTerm = Kp * error;
+
+  pidIntegral += Ki * error * dt;
+  pidIntegral = constrain(pidIntegral, 0.0, (float)PWM_MAX);
+
+  float dTerm = -Kd * (rpmFiltered - pidPrevMeas) / dt;
+  pidPrevMeas = rpmFiltered;
+
+  float out = pTerm + pidIntegral + dTerm;
+  pwmOut = (int)constrain(out, 0.0, (float)PWM_MAX);
+
+  ledcWrite(ENA, pwmOut);
+}
+
+void resetCycle() {
+  stopConveyor();
+  sortingServo.write(SERVO_STRAIGHT);
+  currentUID = "";
+  currentWeightG = 0;
+  currentCategory = "";
+  weightSum = 0;
+  weightCount = 0;
+  irClearSeen = false;
+  changeState(WAIT_RFID);
+  Serial.println("\n[INFO] Siap! Silakan scan RFID barang.");
+}
+
+void handleSerialCommand() {
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == 't' || c == 'T') {
+      tareRequested = true;
+    } else if (c == 'k' || c == 'K') {
+      runInteractiveCalibration();
+      resetCycle();
     }
   }
 }
 
-// ================= KONEKSI JARINGAN =================
-void setupWiFi() {
-  delay(10);
-  Serial.println();
-  Serial.print("[WIFI] Menghubungkan ke ");
-  Serial.println(WIFI_SSID);
+// ================== SETUP ==================
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+
+  ESP32PWM::allocateTimer(0);
+  sortingServo.setPeriodHertz(50);
+  sortingServo.attach(PIN_SERVO, 500, 2400);
+  sortingServo.write(SERVO_STRAIGHT);
+
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  ledcAttachChannel(ENA, freq, resolution, 8);
+  stopConveyor();
+
+  pinMode(ENC_A, INPUT_PULLUP);
+  pinMode(ENC_B, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(ENC_A), handleEncoder, CHANGE);
+
+  pinMode(PIN_IR_SENSOR, INPUT);
+
+  SPI.begin(PIN_RFID_SCK, PIN_RFID_MISO, PIN_RFID_MOSI, PIN_RFID_SS);
+  rfid.PCD_Init();
+
+  scale.begin(PIN_HX711_DT, PIN_HX711_SCK);
+  scale.set_scale(CALIBRATION_FACTOR);
+  Serial.println("[LOADCELL] Pastikan timbangan KOSONG saat boot untuk tare (nol)...");
+  scale.tare(10);
+  Serial.println("[LOADCELL] Tare selesai.");
 
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS, WIFI_CHANNEL);
+  Serial.print("[WIFI] Menghubungkan");
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) {
+    delay(250);
     Serial.print(".");
   }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print(" terhubung, IP: ");
+    Serial.println(WiFi.localIP());
 
-  Serial.println("\n[WIFI] Terhubung!");
-  Serial.print("[WIFI] Alamat IP: ");
-  Serial.println(WiFi.localIP());
+    configTime(GMT_OFFSET, 0, NTP_SERVER);
+    struct tm t;
+    if (getLocalTime(&t, 5000)) {
+      ntpSynced = true;
+      Serial.println("[NTP] Waktu tersinkronisasi.");
+    } else {
+      Serial.println("[NTP] Gagal sinkronisasi.");
+    }
+  } else {
+    Serial.println(" gagal (lanjut tanpa MQTT).");
+  }
+
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(mqttCallback);
+  mqtt.setBufferSize(1024);
+  mqtt.setSocketTimeout(3);
+
+  Serial.println("==========================================");
+  Serial.println(" Sistem Checkweigher IoT");
+  Serial.println(" Ketik 'k' untuk kalibrasi berat barang.");
+  Serial.println(" Ketik 't' untuk tare (nol) ulang.");
+  Serial.println("==========================================");
+
+  resetCycle();
 }
 
-void connectMQTT() {
-  while (!mqttClient.connected()) {
-    Serial.print("[MQTT] Menghubungkan ke broker HiveMQ...");
-    bool connected = false;
-    if (strlen(MQTT_USER) > 0) {
-      connected = mqttClient.connect(CLIENT_ID, MQTT_USER, MQTT_PASS);
-    } else {
-      connected = mqttClient.connect(CLIENT_ID);
+// ================== LOOP ==================
+void loop() {
+  mqttLoop();
+  telemetryLoop();
+  updatePID();
+  handleSerialCommand();
+
+  if (tareRequested && state == WAIT_RFID) {
+    tareRequested = false;
+    Serial.println("[LOADCELL] Tare... pastikan timbangan kosong.");
+    scale.tare(10);
+    Serial.println("[LOADCELL] Tare selesai.");
+  }
+
+  switch (state) {
+
+    case WAIT_RFID: {
+      if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+        currentUID = "";
+        for (byte i = 0; i < rfid.uid.size; i++) {
+          if (rfid.uid.uidByte[i] < 0x10) currentUID += "0";
+          currentUID += String(rfid.uid.uidByte[i], HEX);
+        }
+        currentUID.toUpperCase();
+        rfid.PICC_HaltA();
+        rfid.PCD_StopCrypto1();
+
+        Serial.print("\n[RFID] Barang terdaftar. UID: ");
+        Serial.println(currentUID);
+
+        if (scale.is_ready() && fabs(scale.get_units(1)) > MIN_ITEM_G) {
+          Serial.println("[LOADCELL] Barang sudah terdeteksi di timbangan, langsung menimbang...");
+          weightSum = 0;
+          weightCount = 0;
+          changeState(WEIGHING);
+        } else {
+          Serial.println("[INFO] Silakan letakkan barang di loadcell...");
+          changeState(WAIT_ITEM_ON_SCALE);
+        }
+      }
+      break;
     }
 
-    if (connected) {
-      Serial.println(" Berhasil!");
+    case WAIT_ITEM_ON_SCALE: {
+      static unsigned long lastDbg = 0;
 
-      // Subscribe topik perintah dan konfigurasi
-      mqttClient.subscribe(TOPIC_COMMAND);
-      mqttClient.subscribe(TOPIC_CONFIG_THRESHOLD);
-      mqttClient.subscribe(TOPIC_CONFIG_SETPOINT);
-      Serial.println("[MQTT] Berlangganan topik perintah selesai");
-    } else {
-      Serial.print(" Gagal, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" Coba lagi dalam 3 detik...");
-      delay(3000);
+      if (scale.is_ready()) {
+        float w = fabs(scale.get_units(1));
+
+        if (millis() - lastDbg > 500) {
+          lastDbg = millis();
+          Serial.print("[DEBUG] Berat terbaca: ");
+          Serial.print(w);
+          Serial.println(" g");
+        }
+
+        if (w > MIN_ITEM_G) {
+          Serial.println("[LOADCELL] Barang terdeteksi, menunggu stabil...");
+          weightSum = 0;
+          weightCount = 0;
+          changeState(WEIGHING);
+          break;
+        }
+      } else if (millis() - lastDbg > 500) {
+        lastDbg = millis();
+        Serial.println("[DEBUG] HX711 belum ready, cek wiring DT/SCK");
+      }
+
+      if (millis() - stateStart > TIMEOUT_ITEM_ON_SCALE) {
+        Serial.println("[WARNING] Barang tidak diletakkan di loadcell (timeout).");
+        resetCycle();
+      }
+      break;
+    }
+
+    case WEIGHING: {
+      if (millis() - stateStart < SETTLE_MS) break;
+
+      if (scale.is_ready()) {
+        weightSum += fabs(scale.get_units(1));
+        weightCount++;
+      }
+
+      if (weightCount >= WEIGHT_SAMPLES) {
+        currentWeightG = weightSum / weightCount;
+
+        if (currentWeightG < MIN_ITEM_G) {
+          Serial.println("[WARNING] Barang diangkat saat penimbangan. Ulangi.");
+          resetCycle();
+          break;
+        }
+
+        currentCategory = determineCategory(currentWeightG);
+
+        Serial.printf("[LOADCELL] Berat: %.1f g -> Kategori: %s\n",
+                      currentWeightG, currentCategory.c_str());
+
+        publishWeighing();
+
+        if (currentCategory == "ERROR") {
+          Serial.println("[ERROR] Berat melebihi toleransi maksimum! Konveyor TIDAK dijalankan.");
+          Serial.println("[INFO] Angkat barang, lalu siklus akan reset.");
+          resetCycle();
+          break;
+        }
+
+        Serial.println("[CONVEYOR] Conveyor dijalankan...");
+        startConveyor();
+        changeState(CONVEYOR_RUN);
+      }
+      break;
+    }
+
+    case CONVEYOR_RUN: {
+      if (irDetected()) {
+        Serial.println("[IR] Barang tiba di tempat sortir.");
+        changeState(SORTING);
+        break;
+      }
+      if (millis() - stateStart > TIMEOUT_TRAVEL) {
+        Serial.println("[WARNING] Barang tidak sampai ke sensor IR (timeout).");
+        resetCycle();
+      }
+      break;
+    }
+
+    case SORTING: {
+      if (currentCategory == "BERAT") {
+        Serial.println("[SERVO] BERAT -> servo 90 derajat (belok ke wadah sortir).");
+        sortingServo.write(SERVO_DIVERT);
+      } else {
+        Serial.println("[SERVO] RINGAN -> servo tetap (jalur lurus).");
+        sortingServo.write(SERVO_STRAIGHT);
+      }
+      irClearSeen = false;
+      changeState(WAIT_CLEAR);
+      break;
+    }
+
+    case WAIT_CLEAR: {
+      if (!irDetected()) {
+        if (!irClearSeen) {
+          irClearSeen = true;
+          irClearTime = millis();
+        }
+        if (millis() - irClearTime >= CLEAR_DELAY_MS &&
+            millis() - stateStart >= SERVO_MIN_HOLD_MS) {
+          Serial.println("[INFO] Barang sudah melewati tempat sortir.");
+          resetCycle();
+        }
+      } else {
+        irClearSeen = false;
+      }
+
+      if (millis() - stateStart > TIMEOUT_CLEAR) {
+        Serial.println("[INFO] Sensor IR masih aktif terlalu lama, siklus diakhiri paksa.");
+        resetCycle();
+      }
+      break;
     }
   }
 }
-
