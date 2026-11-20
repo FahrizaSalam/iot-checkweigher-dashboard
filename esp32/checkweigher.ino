@@ -31,7 +31,7 @@
 */
 
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
+#include <WiFiClient.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <SPI.h>
@@ -43,10 +43,11 @@
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASS     = "YOUR_WIFI_PASSWORD";
 
-const char* MQTT_BROKER   = "YOUR_CLUSTER.s1.eu.hivemq.cloud";
-const int   MQTT_PORT     = 8883;
-const char* MQTT_USER     = "YOUR_HIVEMQ_USERNAME";
-const char* MQTT_PASS     = "YOUR_HIVEMQ_PASSWORD";
+// Konfigurasi Broker Public HiveMQ (broker.hivemq.com port 1883 TCP / 8883 TLS)
+const char* MQTT_BROKER   = "broker.hivemq.com";
+const int   MQTT_PORT     = 1883; // 1883 untuk unencrypted (public), 8883 untuk TLS
+const char* MQTT_USER     = "";   // Kosongkan untuk broker public
+const char* MQTT_PASS     = "";   // Kosongkan untuk broker public
 const char* CLIENT_ID     = "ESP32-Checkweigher-Client";
 
 // Topik MQTT
@@ -75,7 +76,8 @@ const char* TOPIC_CONFIG_SETPOINT  = "checkweigher/config/setpoint";
 #define PIN_MOTOR_DIR2   27
 
 // ================= OBJEK PERANGKAT =================
-WiFiClientSecure net;
+// Catatan: Gunakan WiFiClient untuk port 1883 (standar public), atau WiFiClientSecure untuk TLS (port 8883)
+WiFiClient net;
 PubSubClient mqttClient(net);
 HX711 scale;
 MFRC522 rfid(PIN_RFID_SS, PIN_RFID_RST);
@@ -155,8 +157,7 @@ void setup() {
   // Koneksi WiFi
   setupWiFi();
 
-  // Konfigurasi TLS HiveMQ Cloud
-  net.setInsecure(); // Untuk development (dapat diganti CA Root Cert jika produksi)
+  // Konfigurasi MQTT (jika memakai WiFiClientSecure untuk TLS port 8883, gunakan net.setInsecure())
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setCallback(onMqttMessageReceived);
   mqttClient.setBufferSize(1024);
@@ -453,8 +454,15 @@ void setupWiFi() {
 
 void connectMQTT() {
   while (!mqttClient.connected()) {
-    Serial.print("[MQTT] Menghubungkan ke HiveMQ Cloud...");
-    if (mqttClient.connect(CLIENT_ID, MQTT_USER, MQTT_PASS)) {
+    Serial.print("[MQTT] Menghubungkan ke broker HiveMQ...");
+    bool connected = false;
+    if (strlen(MQTT_USER) > 0) {
+      connected = mqttClient.connect(CLIENT_ID, MQTT_USER, MQTT_PASS);
+    } else {
+      connected = mqttClient.connect(CLIENT_ID);
+    }
+
+    if (connected) {
       Serial.println(" Berhasil!");
 
       // Subscribe topik perintah dan konfigurasi
