@@ -48,7 +48,7 @@ const int PIN_HX711_SCK = 17;
 // ================== PARAMETER LOADCELL ==================
 // Salin angka hasil kalibrasi ('k') dari Serial Monitor ke baris ini agar permanen:
 float CALIBRATION_FACTOR = 11209.3203;       
-const float MIN_ITEM_G        = 15.0;  // Ambang batas beban (di bawah 15g dianggap timbangan kosong / noise getaran)
+const float MIN_ITEM_G        = 5.0;   
 const unsigned long SETTLE_MS = 500;
 const int WEIGHT_SAMPLES      = 10;
 
@@ -456,9 +456,6 @@ void resetCycle() {
   weightSum = 0;
   weightCount = 0;
   irClearSeen = false;
-  if (scale.is_ready()) {
-    scale.tare(5); // Auto-tare saat siklus selesai agar titik 0 selalu bersih untuk scan berikutnya
-  }
   changeState(WAIT_RFID);
   Serial.println("\n[INFO] Siap! Silakan scan RFID barang.");
 }
@@ -562,37 +559,7 @@ void loop() {
   switch (state) {
 
     case WAIT_RFID: {
-      static unsigned long lastScaleWarn = 0;
-      float currentW = 0;
-      if (scale.is_ready()) {
-        currentW = scale.get_units(3); // Rata-rata 3 sampel agar kebal noise 1 pembacaan
-      }
-
-      // Jika ada drift nilai negatif, lakukan auto-tare otomatis
-      if (currentW < -MIN_ITEM_G && scale.is_ready()) {
-        scale.tare(5);
-        currentW = 0;
-      }
-
-      bool scaleHasItem = (currentW > MIN_ITEM_G);
-
-      // Jika ada beban di atas timbangan sebelum scan RFID, ingatkan operator untuk mengangkat barang
-      if (scaleHasItem && (millis() - lastScaleWarn > 2000)) {
-        lastScaleWarn = millis();
-        Serial.printf("[PERINGATAN] Ada beban di atas timbangan (%.1f g > %.1f g)! Angkat barang terlebih dahulu sebelum scan RFID.\n", currentW, MIN_ITEM_G);
-      }
-
       if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-        // Cek lagi dengan rata-rata 3 sampel saat tap RFID
-        float checkW = scale.is_ready() ? scale.get_units(3) : 0;
-        if (checkW > MIN_ITEM_G) {
-          Serial.printf("\n[DITOLAK] Barang terdeteksi di timbangan (%.1f g > ambang %.1f g)!\n", checkW, MIN_ITEM_G);
-          Serial.println("[INSTRUKSI] Angkat barang dari timbangan terlebih dahulu, lalu scan RFID ulang dalam kondisi timbangan kosong.");
-          rfid.PICC_HaltA();
-          rfid.PCD_StopCrypto1();
-          break;
-        }
-
         currentUID = "";
         for (byte i = 0; i < rfid.uid.size; i++) {
           if (rfid.uid.uidByte[i] < 0x10) currentUID += "0";
@@ -602,10 +569,18 @@ void loop() {
         rfid.PICC_HaltA();
         rfid.PCD_StopCrypto1();
 
-        Serial.print("\n[RFID] Scan berhasil! UID: ");
+        Serial.print("\n[RFID] Barang terdaftar. UID: ");
         Serial.println(currentUID);
-        Serial.println("[INFO] Silakan letakkan barang di atas timbangan (loadcell)...");
-        changeState(WAIT_ITEM_ON_SCALE);
+
+        if (scale.is_ready() && fabs(scale.get_units(1)) > MIN_ITEM_G) {
+          Serial.println("[LOADCELL] Barang sudah terdeteksi di timbangan, langsung menimbang...");
+          weightSum = 0;
+          weightCount = 0;
+          changeState(WEIGHING);
+        } else {
+          Serial.println("[INFO] Silakan letakkan barang di loadcell...");
+          changeState(WAIT_ITEM_ON_SCALE);
+        }
       }
       break;
     }
@@ -614,7 +589,7 @@ void loop() {
       static unsigned long lastDbg = 0;
 
       if (scale.is_ready()) {
-        float w = scale.get_units(3);
+        float w = fabs(scale.get_units(1));
 
         if (millis() - lastDbg > 500) {
           lastDbg = millis();
