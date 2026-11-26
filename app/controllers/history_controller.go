@@ -88,7 +88,7 @@ func (ctl *HistoryController) ExportCSV(c fiber.Ctx) error {
 	writer := csv.NewWriter(c)
 	defer writer.Flush()
 
-	header := []string{"ID", "Kode Barang", "RFID UID", "Nama Barang", "Berat (g)", "Kategori", "Kecepatan (RPM)", "Waktu Ukur"}
+	header := []string{"ID", "Kode Barang", "RFID UID", "Nama Barang", "Berat (g)", "Kategori", "Waktu Ukur"}
 	if err := writer.Write(header); err != nil {
 		return err
 	}
@@ -106,7 +106,6 @@ func (ctl *HistoryController) ExportCSV(c fiber.Ctx) error {
 			name,
 			fmt.Sprintf("%.1f", w.Weight),
 			w.Category,
-			fmt.Sprintf("%.1f", w.ConveyorSpeed),
 			w.MeasuredAt.Format("2006-01-02 15:04:05"),
 		}
 		if err := writer.Write(row); err != nil {

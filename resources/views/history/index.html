@@ -54,7 +54,6 @@
                         <th class="px-6 py-4">RFID UID</th>
                         <th class="px-6 py-4">Berat</th>
                         <th class="px-6 py-4">Kategori</th>
-                        <th class="px-6 py-4">Kecepatan</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
@@ -92,13 +91,10 @@
                                 </span>
                             {{end}}
                         </td>
-                        <td class="px-6 py-4 font-mono text-xs text-slate-600">
-                            {{printf "%.1f" .ConveyorSpeed}} RPM
-                        </td>
                     </tr>
                     {{else}}
                     <tr>
-                        <td colspan="6" class="px-6 py-12 text-center text-slate-400">
+                        <td colspan="5" class="px-6 py-12 text-center text-slate-400">
                             <p class="font-semibold text-slate-600 text-base">Tidak ada catatan penimbangan.</p>
                             <p class="text-xs text-slate-400 mt-1">Data penimbangan dari alat ESP32 akan muncul di sini secara otomatis.</p>
                         </td>
