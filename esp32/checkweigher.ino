@@ -123,6 +123,10 @@ bool irClearSeen = false;
 unsigned long irClearTime = 0;
 
 bool tareRequested = false;
+bool pendingWeighingPublish = false;
+unsigned long conveyorCycleStartMs = 0;
+float cycleRpmSum = 0.0;
+int cycleRpmCount = 0;
 
 bool irDetected();
 void startConveyor();
@@ -250,12 +254,12 @@ void mqttPublish(const char* topic, const char* payload, bool retain = false) {
   }
 }
 
-// Mengirim data hasil penimbangan barang dan UID RFID ke broker MQTT.
-void publishWeighing() {
+// Mengirim data hasil penimbangan barang, UID RFID, dan kecepatan konveyor ke broker MQTT.
+void publishWeighing(float conveyorSpeed) {
   JsonDocument doc;
   doc["rfid_uid"] = currentUID;
   doc["weight"] = currentWeightG;
-  doc["conveyor_speed"] = rpmFiltered;
+  doc["conveyor_speed"] = conveyorSpeed;
   String ts = getTimestamp();
   if (ts.length() > 0) doc["timestamp"] = ts;
 
@@ -498,6 +502,11 @@ void updatePID() {
 
   if (!conveyorRunning) return;
 
+  if (pendingWeighingPublish && (now - conveyorCycleStartMs >= 500)) {
+    cycleRpmSum += rpmFiltered;
+    cycleRpmCount++;
+  }
+
   float error = setpointRPM - rpmFiltered;
   float pTerm = Kp * error;
 
@@ -513,8 +522,14 @@ void updatePID() {
   ledcWrite(ENA, pwmOut);
 }
 
-// Menghentikan konveyor, mengembalikan posisi servo, dan mereset variabel siklus ke WAIT_RFID.
+// Mengirim data penimbangan tertunda jika ada, menghentikan konveyor, lalu mereset siklus ke WAIT_RFID.
 void resetCycle() {
+  if (pendingWeighingPublish) {
+    float avgSpeed = (cycleRpmCount > 0) ? (cycleRpmSum / cycleRpmCount) : rpmFiltered;
+    publishWeighing(avgSpeed);
+    publishDeviceStatus();
+    pendingWeighingPublish = false;
+  }
   stopConveyor();
   sortingServo.write(SERVO_STRAIGHT);
   currentUID = "";
@@ -522,6 +537,8 @@ void resetCycle() {
   currentCategory = "";
   weightSum = 0;
   weightCount = 0;
+  cycleRpmSum = 0.0;
+  cycleRpmCount = 0;
   irClearSeen = false;
   changeState(WAIT_RFID);
   Serial.println("\n[INFO] Siap! Silakan scan RFID barang (atau ketik 'k' kalibrasi / 't' tare).");
@@ -563,7 +580,7 @@ void setup() {
 
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(ENC_A), handleEncoder, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENC_A), handleEncoder, RISING);
 
   pinMode(PIN_IR_SENSOR, INPUT);
 
@@ -712,18 +729,23 @@ void loop() {
         Serial.printf("[LOADCELL] Berat: %.1f g -> Kategori: %s\n",
                       currentWeightG, currentCategory.c_str());
 
-        publishWeighing();
-        publishDeviceStatus();
-
         if (currentCategory == "ERROR") {
+          publishWeighing(0.0);
+          publishDeviceStatus();
           Serial.println("[ERROR] Berat melebihi toleransi maksimum! Konveyor TIDAK dijalankan.");
           Serial.println("[INFO] Angkat barang, lalu siklus akan reset.");
           resetCycle();
           break;
         }
 
+        pendingWeighingPublish = true;
+        cycleRpmSum = 0.0;
+        cycleRpmCount = 0;
+        publishDeviceStatus();
+
         Serial.println("[CONVEYOR] Conveyor dijalankan...");
         startConveyor();
+        conveyorCycleStartMs = millis();
         changeState(CONVEYOR_RUN);
       }
       break;
