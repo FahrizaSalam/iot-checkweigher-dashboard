@@ -1,5 +1,4 @@
 <div class="max-w-2xl mx-auto space-y-6">
-    <!-- Breadcrumb & Title -->
     <div>
         <a href="/items" class="text-xs font-semibold text-blue-600 hover:text-blue-800 transition">
             &larr; Kembali ke Daftar Barang
@@ -8,7 +7,6 @@
         <p class="text-sm text-slate-500 mt-1">Perbarui informasi nama, rfid UID, atau deskripsi barang.</p>
     </div>
 
-    <!-- Form Card -->
     <div class="bg-white rounded-2xl p-6 sm:p-8 border border-slate-100 shadow-sm">
         <form method="POST" action="/items/{{.Item.ID}}">
             <input type="hidden" name="_csrf" value="{{.CsrfToken}}">

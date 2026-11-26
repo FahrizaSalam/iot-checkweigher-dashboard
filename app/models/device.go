@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// DeviceStatus mewakili tabel "device_status" (status kesehatan sensor & aktuator).
+// DeviceStatus merepresentasikan tabel device_status untuk memantau kondisi sensor dan aktuator.
 type DeviceStatus struct {
 	ID         uint       `gorm:"primaryKey" json:"id"`
 	DeviceName string     `gorm:"size:100;not null;uniqueIndex" json:"device_name"`
@@ -14,6 +14,7 @@ type DeviceStatus struct {
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
+// TableName menentukan nama tabel database untuk model DeviceStatus.
 func (DeviceStatus) TableName() string {
 	return "device_status"
 }

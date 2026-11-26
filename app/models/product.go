@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// Product mewakili tabel "products" (konfigurasi threshold toleransi berat dan kecepatan setpoint).
+// Product merepresentasikan tabel products yang menyimpan konfigurasi threshold dan setpoint RPM.
 type Product struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
 	Name         string    `gorm:"size:100;not null" json:"name"`

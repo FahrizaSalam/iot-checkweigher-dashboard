@@ -11,7 +11,7 @@ import (
 
 var validate = validator.New()
 
-// Validate memvalidasi struct request dan mengembalikan map pesan error berbahasa Indonesia.
+// Validate memvalidasi field struct request dan mengembalikan map pesan kesalahan per field.
 func Validate(req any) map[string]string {
 	errs := map[string]string{}
 	err := validate.Struct(req)
@@ -42,6 +42,7 @@ func Validate(req any) map[string]string {
 	return errs
 }
 
+// message menerjemahkan aturan validasi yang gagal menjadi pesan teks berbahasa Indonesia.
 func message(label string, fe validator.FieldError) string {
 	switch fe.Tag() {
 	case "required":

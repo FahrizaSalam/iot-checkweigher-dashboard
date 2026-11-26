@@ -20,21 +20,20 @@ var (
 	mqttMu     sync.RWMutex
 )
 
-// GetMQTTClient mengembalikan instance MQTTClient aktif secara thread-safe.
+// GetMQTTClient mengembalikan instance client MQTT yang aktif secara thread-safe.
 func GetMQTTClient() mqtt.Client {
 	mqttMu.RLock()
 	defer mqttMu.RUnlock()
 	return MQTTClient
 }
 
-// ConnectMQTT menghubungkan server ke broker MQTT (mendukung Public HiveMQ & HiveMQ Cloud TLS).
+// ConnectMQTT menghubungkan aplikasi ke broker MQTT beserta handler auto-reconnect.
 func ConnectMQTT(onConnect ...func()) (mqtt.Client, error) {
 	broker := Env("MQTT_BROKER", "tcp://broker.hivemq.com:1883")
 	clientID := Env("MQTT_CLIENT_ID", "checkweigher-server")
 	username := Env("MQTT_USERNAME", "")
 	password := Env("MQTT_PASSWORD", "")
 
-	// Hindari bentrok Client ID di broker publik HiveMQ jika masih memakai nilai default
 	if strings.Contains(broker, "broker.hivemq.com") && clientID == "checkweigher-server" {
 		clientID = fmt.Sprintf("%s-%d-%d", clientID, os.Getpid(), time.Now().UnixNano()%10000)
 	}
@@ -54,7 +53,6 @@ func ConnectMQTT(onConnect ...func()) (mqtt.Client, error) {
 		opts.SetPassword(password)
 	}
 
-	// Gunakan TLS jika skema adalah ssl://, tls://, atau tcps://
 	isTLS := strings.HasPrefix(broker, "ssl://") || strings.HasPrefix(broker, "tls://") || strings.HasPrefix(broker, "tcps://")
 	if isTLS {
 		tlsConfig := &tls.Config{
@@ -64,7 +62,6 @@ func ConnectMQTT(onConnect ...func()) (mqtt.Client, error) {
 		opts.SetTLSConfig(tlsConfig)
 	}
 
-	// Dial menggunakan IPv4 (tcp4) untuk mencegah koneksi terputus (wsarecv) pada jaringan dual-stack (IPv6)
 	opts.SetCustomOpenConnectionFn(func(uri *url.URL, options mqtt.ClientOptions) (net.Conn, error) {
 		dialer := &net.Dialer{Timeout: 5 * time.Second}
 		host := uri.Host

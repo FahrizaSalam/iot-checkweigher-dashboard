@@ -8,6 +8,7 @@ import (
 	"github.com/gofiber/contrib/v3/websocket"
 )
 
+// WebSocketHub mengelola koneksi klien WebSocket dan distribusi pesan siaran.
 type WebSocketHub struct {
 	clients    map[*websocket.Conn]bool
 	mu         sync.RWMutex
@@ -18,6 +19,7 @@ type WebSocketHub struct {
 
 var Hub = NewWebSocketHub()
 
+// NewWebSocketHub membuat instance baru WebSocketHub beserta channel-nya.
 func NewWebSocketHub() *WebSocketHub {
 	return &WebSocketHub{
 		clients:    make(map[*websocket.Conn]bool),
@@ -27,6 +29,7 @@ func NewWebSocketHub() *WebSocketHub {
 	}
 }
 
+// Run memproses registrasi klien dan menyiarkan pesan ke semua klien WebSocket aktif.
 func (h *WebSocketHub) Run() {
 	for {
 		select {
@@ -65,10 +68,12 @@ func (h *WebSocketHub) Run() {
 	}
 }
 
+// Broadcast memasukkan payload data ke antrean siaran WebSocket.
 func (h *WebSocketHub) Broadcast(data interface{}) {
 	h.broadcast <- data
 }
 
+// Handle mendaftarkan koneksi WebSocket klien yang baru masuk dan menjaganya tetap terbuka.
 func (h *WebSocketHub) Handle(conn *websocket.Conn) {
 	h.register <- conn
 	defer func() {

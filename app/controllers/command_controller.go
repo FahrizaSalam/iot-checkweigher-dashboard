@@ -10,7 +10,7 @@ import (
 
 type CommandController struct{}
 
-// Execute POST /api/command — mengirim perintah START, STOP, TARE ke ESP32.
+// Execute memvalidasi dan mengirim perintah kontrol (START, STOP, TARE) ke ESP32 via MQTT.
 func (ctl *CommandController) Execute(c fiber.Ctx) error {
 	var body struct {
 		Command string `json:"command" form:"command"`

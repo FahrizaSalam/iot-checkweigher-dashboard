@@ -14,7 +14,7 @@ import (
 
 type ItemController struct{}
 
-// Index GET /items — daftar barang terdaftar + pencarian + pagination.
+// Index menampilkan daftar barang terdaftar dengan fitur pencarian dan pagination.
 func (ctl *ItemController) Index(c fiber.Ctx) error {
 	search := strings.TrimSpace(c.Query("q"))
 	page := fiber.Query[int](c, "page", 1)
@@ -44,7 +44,7 @@ func (ctl *ItemController) Index(c fiber.Ctx) error {
 	})
 }
 
-// Create GET /items/create — form pendaftaran barang & RFID baru.
+// Create menampilkan form pendaftaran barang dan tag RFID baru.
 func (ctl *ItemController) Create(c fiber.Ctx) error {
 	return helpers.View(c, "items/create", fiber.Map{
 		"Title": "Daftarkan Barang Baru",
@@ -52,7 +52,7 @@ func (ctl *ItemController) Create(c fiber.Ctx) error {
 	})
 }
 
-// Store POST /items — simpan barang baru.
+// Store memvalidasi dan menyimpan data barang baru beserta kode barang otomatis.
 func (ctl *ItemController) Store(c fiber.Ctx) error {
 	var req requests.ItemRequest
 	if err := c.Bind().Form(&req); err != nil {
@@ -65,7 +65,6 @@ func (ctl *ItemController) Store(c fiber.Ctx) error {
 
 	errs := requests.Validate(req)
 
-	// Cek apakah RFID UID sudah digunakan
 	var existingCount int64
 	config.DB.Model(&models.Item{}).Where("rfid_uid = ?", req.RfidUID).Count(&existingCount)
 	if existingCount > 0 {
@@ -81,7 +80,6 @@ func (ctl *ItemController) Store(c fiber.Ctx) error {
 		})
 	}
 
-	// Auto-generate kode barang berikutnya (BRG-01, BRG-02, dst.)
 	var maxID uint
 	config.DB.Model(&models.Item{}).Select("COALESCE(MAX(id), 0)").Scan(&maxID)
 	nextCode := fmt.Sprintf("BRG-%02d", maxID+1)
@@ -100,7 +98,7 @@ func (ctl *ItemController) Store(c fiber.Ctx) error {
 	return c.Redirect().With("success", "Barang "+item.Name+" ("+item.ItemCode+") berhasil didaftarkan.").To("/items")
 }
 
-// Edit GET /items/:id/edit — form ubah data barang.
+// Edit menampilkan form ubah data barang berdasarkan ID.
 func (ctl *ItemController) Edit(c fiber.Ctx) error {
 	var item models.Item
 	if err := config.DB.First(&item, c.Params("id")).Error; err != nil {
@@ -118,7 +116,7 @@ func (ctl *ItemController) Edit(c fiber.Ctx) error {
 	})
 }
 
-// Update PUT /items/:id — simpan perubahan data barang.
+// Update memvalidasi dan memperbarui data barang yang dipilih.
 func (ctl *ItemController) Update(c fiber.Ctx) error {
 	var item models.Item
 	if err := config.DB.First(&item, c.Params("id")).Error; err != nil {
@@ -136,7 +134,6 @@ func (ctl *ItemController) Update(c fiber.Ctx) error {
 
 	errs := requests.Validate(req)
 
-	// Cek apakah RFID UID duplikat (abaikan ID diri sendiri)
 	var count int64
 	config.DB.Model(&models.Item{}).Where("rfid_uid = ? AND id <> ?", req.RfidUID, item.ID).Count(&count)
 	if count > 0 {
@@ -161,7 +158,7 @@ func (ctl *ItemController) Update(c fiber.Ctx) error {
 	return c.Redirect().With("success", "Data barang "+item.ItemCode+" berhasil diperbarui.").To("/items")
 }
 
-// Destroy DELETE /items/:id — hapus data barang.
+// Destroy menghapus data barang berdasarkan ID.
 func (ctl *ItemController) Destroy(c fiber.Ctx) error {
 	var item models.Item
 	if err := config.DB.First(&item, c.Params("id")).Error; err != nil {

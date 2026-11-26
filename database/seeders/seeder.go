@@ -8,9 +8,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// Run mengisi data awal (seeder) ke database (mirip "php artisan db:seed").
+// Run mengisi data awal konfigurasi produk, status perangkat, dan sampel penimbangan.
 func Run(db *gorm.DB) {
-	// 1. Seed Default Product Config
 	product := models.Product{
 		Name:         "Default Checkweigher Config",
 		TargetWeight: 300.0,
@@ -21,7 +20,6 @@ func Run(db *gorm.DB) {
 	}
 	db.Where(models.Product{Name: product.Name}).FirstOrCreate(&product)
 
-	// 2. Seed Device Status
 	devices := []models.DeviceStatus{
 		{DeviceName: "LoadCell HX711", DeviceType: "loadcell", Status: "OFFLINE", LastValue: "0.0 g"},
 		{DeviceName: "Rotary Encoder", DeviceType: "encoder", Status: "OFFLINE", LastValue: "0.0 RPM"},
@@ -34,7 +32,6 @@ func Run(db *gorm.DB) {
 		db.Where(models.DeviceStatus{DeviceName: dev.DeviceName}).FirstOrCreate(&dev)
 	}
 
-	// 3. Seed Sample Registered Items
 	items := []models.Item{
 		{ItemCode: "BRG-01", RfidUID: "A1B2C3D4", Name: "Kardus Sampel A", Description: "Barang uji coba bobot ringan"},
 		{ItemCode: "BRG-02", RfidUID: "E5F6A7B8", Name: "Kardus Sampel B", Description: "Barang uji coba bobot standar"},
@@ -44,7 +41,6 @@ func Run(db *gorm.DB) {
 		db.Where(models.Item{ItemCode: items[i].ItemCode}).FirstOrCreate(&items[i])
 	}
 
-	// 4. Seed Sample Weighings
 	now := time.Now()
 	sampleWeighings := []models.Weighing{
 		{ItemID: &items[0].ID, RfidUID: items[0].RfidUID, Weight: 245.0, Category: "RINGAN", ConveyorSpeed: 58.7, MeasuredAt: now.Add(-10 * time.Minute)},
@@ -55,7 +51,6 @@ func Run(db *gorm.DB) {
 		db.Create(&w)
 	}
 
-	// 5. Seed Daily Stats for today
 	todayStr := now.Format("2006-01-02")
 	stats := models.DailyStats{
 		StatDate:     todayStr,

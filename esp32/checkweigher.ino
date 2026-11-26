@@ -1,30 +1,30 @@
 #include <WiFi.h>
-#include <PubSubClient.h>   // Library: "PubSubClient" by Nick O'Leary
+#include <PubSubClient.h>
 #include <SPI.h>
 #include <MFRC522.h>
 #include <ESP32Servo.h>
-#include <HX711.h>          // Library: "HX711" by Bogdan Necula (bogde)
-#include <ArduinoJson.h>    // Library: "ArduinoJson" by Benoit Blanchon
+#include <HX711.h>
+#include <ArduinoJson.h>
 #include <time.h>
 #include <math.h>
 
-// ================== WIFI & MQTT ==================
+// Konfigurasi jaringan WiFi, broker MQTT, dan sinkronisasi waktu NTP.
 const char* WIFI_SSID = "YTAA";
 const char* WIFI_PASS = "123456789";
-const int   WIFI_CHANNEL = 6;            // Hapus parameter WIFI_CHANNEL di WiFi.begin jika WiFi asli
+const int   WIFI_CHANNEL = 6;
 
 const char* MQTT_HOST = "broker.hivemq.com";
 const int   MQTT_PORT = 1883;
 
 const char* NTP_SERVER = "pool.ntp.org";
-const long  GMT_OFFSET = 25200;  // WIB = UTC+7
+const long  GMT_OFFSET = 25200;
 bool ntpSynced = false;
 
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 
-// ================== KONFIGURASI PIN ==================
-const int ENA = 25;   // PWM motor (L298N)
+// Pemetaan pin GPIO ESP32 untuk driver motor, encoder, sensor IR, servo, RFID, dan HX711.
+const int ENA = 25;
 const int IN1 = 26;
 const int IN2 = 33;
 
@@ -32,7 +32,7 @@ const int ENC_A = 4;
 const int ENC_B = 32;
 
 const int PIN_IR_SENSOR = 27;
-const int IR_ACTIVE_STATE = LOW;  // Ganti HIGH jika modul IR aktif-HIGH
+const int IR_ACTIVE_STATE = LOW;
 
 const int PIN_SERVO = 13;
 
@@ -45,20 +45,16 @@ const int PIN_RFID_RST  = 22;
 const int PIN_HX711_DT  = 16;
 const int PIN_HX711_SCK = 17;
 
-// ================== PARAMETER LOADCELL ==================
-// Salin angka hasil kalibrasi ('k') dari Serial Monitor ke baris ini agar permanen:
-float CALIBRATION_FACTOR = 428.90;       
+// Parameter kalibrasi loadcell, ambang batas toleransi berat, dan durasi sortir.
+float CALIBRATION_FACTOR = 428.90;
 long  zero_offset        = 0;
-const float MIN_ITEM_G        = 5.0;   
+const float MIN_ITEM_G        = 5.0;
 const unsigned long SETTLE_MS = 500;
-const int WEIGHT_SAMPLES      = 5;    // 5x bacaRawStabil() (total 35 sampel median-filtered)
+const int WEIGHT_SAMPLES      = 5;
 
-// ================== THRESHOLD TOLERANSI DEFAULT (SATUAN GRAM) ==================
-float toleranceMin = 300.0;     // Di bawah ini = RINGAN (disortir via servo ke wadah reject/ringan)
-float toleranceMax = 1000.0;    // Di atas ini  = ERROR  (motor konveyor berhenti)
-                                // Di antara    = BERAT  (pass, jalur lurus konveyor)
+float toleranceMin = 300.0;
+float toleranceMax = 1000.0;
 
-// ================== PARAMETER SERVO & WAKTU ==================
 const int SERVO_STRAIGHT = 0;
 const int SERVO_DIVERT   = 90;
 
@@ -68,7 +64,7 @@ const unsigned long TIMEOUT_CLEAR         = 15000;
 const unsigned long CLEAR_DELAY_MS        = 600;
 const unsigned long SERVO_MIN_HOLD_MS     = 2000;
 
-// ================== ENCODER & MOTOR ==================
+// Konstanta encoder, parameter PID kecepatan motor, dan objek perangkat.
 volatile long encoderValue = 0;
 const int PULSES_PER_MOTOR_REV = 11;
 const float GEAR_RATIO = 90.0;
@@ -78,7 +74,6 @@ const int freq = 5000;
 const int resolution = 8;
 const int PWM_MAX = 255;
 
-// ================== PID KECEPATAN ==================
 float setpointRPM = 60.0;
 const float MAX_RPM_LIMIT = 200.0;
 
@@ -95,12 +90,11 @@ float pidIntegral = 0;
 float pidPrevMeas = 0;
 int   pwmOut = 0;
 
-// ================== OBJEK ==================
 MFRC522 rfid(PIN_RFID_SS, PIN_RFID_RST);
 Servo sortingServo;
 HX711 scale;
 
-// ================== STATE MACHINE ==================
+// Definisi state machine dan variabel status siklus checkweigher.
 enum State {
   WAIT_RFID,
   WAIT_ITEM_ON_SCALE,
@@ -130,13 +124,12 @@ unsigned long irClearTime = 0;
 
 bool tareRequested = false;
 
-// ================== FORWARD DECLARATIONS ==================
 bool irDetected();
 void startConveyor();
 void stopConveyor();
 void resetCycle();
 
-// ================== FUNGSI LOADCELL ANTI-SPIKE ==================
+// Membaca 7 sampel raw HX711 lalu mengambil rata-rata 3 nilai tengah untuk meredam lonjakan pembacaan.
 long bacaRawStabil() {
   const int jumlahSampel = 7;
   long data[jumlahSampel];
@@ -144,13 +137,12 @@ long bacaRawStabil() {
   for (int i = 0; i < jumlahSampel; i++) {
     unsigned long waitStart = millis();
     while (!scale.is_ready()) {
-      if (millis() - waitStart > 200) return zero_offset; // Cegah hang jika HX711 terputus
+      if (millis() - waitStart > 200) return zero_offset;
       delay(1);
     }
     data[i] = scale.read();
   }
 
-  // Urutkan sampel (Bubble Sort) untuk membuang nilai ekstrem atas & bawah
   for (int i = 0; i < jumlahSampel - 1; i++) {
     for (int j = i + 1; j < jumlahSampel; j++) {
       if (data[i] > data[j]) {
@@ -161,22 +153,22 @@ long bacaRawStabil() {
     }
   }
 
-  // Ambil rata-rata dari 3 nilai tengah
   return (data[2] + data[3] + data[4]) / 3;
 }
 
+// Mengonversi nilai mentah loadcell menjadi gram berdasarkan zero offset dan faktor kalibrasi.
 float getWeightGram() {
   if (fabs(CALIBRATION_FACTOR) < 0.0001) return 0.0;
   long rawSekarang = bacaRawStabil();
   float beratGram = (float)(rawSekarang - zero_offset) / CALIBRATION_FACTOR;
 
-  // Deadzone di sekitar 0 gram untuk meredam fluktuasi mikro
   if (fabs(beratGram) < 0.2) {
     beratGram = 0.0;
   }
   return beratGram;
 }
 
+// Mengunci ulang titik nol timbangan dalam kondisi tanpa beban.
 void prosesTare() {
   Serial.println("[LOADCELL] Melakukan Tare (Nol-kan timbangan), pastikan kosong...");
   delay(500);
@@ -184,7 +176,7 @@ void prosesTare() {
   Serial.printf("[LOADCELL] Tare selesai! Zero Offset: %ld\n", zero_offset);
 }
 
-// ================== KALIBRASI INTERAKTIF VIA SERIAL ==================
+// Menjalankan prosedur kalibrasi interaktif melalui Serial Monitor menggunakan beban referensi.
 void runInteractiveCalibration() {
   stopConveyor();
   Serial.println("\n==================================================");
@@ -241,7 +233,7 @@ void runInteractiveCalibration() {
   Serial.println("==================================================\n");
 }
 
-// ================== TIMESTAMP HELPER ==================
+// Mengembalikan timestamp waktu lokal WIB dalam format RFC3339 apabila NTP tersinkronisasi.
 String getTimestamp() {
   if (!ntpSynced) return "";
   struct tm t;
@@ -251,13 +243,14 @@ String getTimestamp() {
   return String(buf);
 }
 
-// ================== MQTT PUBLISH ==================
+// Mengirim payload ke topik MQTT ketika koneksi broker aktif.
 void mqttPublish(const char* topic, const char* payload, bool retain = false) {
   if (mqtt.connected()) {
     mqtt.publish(topic, payload, retain);
   }
 }
 
+// Mengirim data hasil penimbangan barang dan UID RFID ke broker MQTT.
 void publishWeighing() {
   JsonDocument doc;
   doc["rfid_uid"] = currentUID;
@@ -272,6 +265,7 @@ void publishWeighing() {
   Serial.printf("[MQTT] Publish weighing: %s\n", buf);
 }
 
+// Mengirim data telemetri kecepatan RPM dan nilai PWM motor ke broker MQTT.
 void publishConveyorRPM() {
   JsonDocument doc;
   doc["actual_rpm"] = rpmFiltered;
@@ -284,6 +278,7 @@ void publishConveyorRPM() {
   mqttPublish("checkweigher/conveyor/rpm", buf);
 }
 
+// Mengirim status dan nilai terbaru seluruh sensor serta aktuator ke broker MQTT.
 void publishDeviceStatus() {
   JsonDocument doc;
   JsonArray arr = doc.to<JsonArray>();
@@ -337,7 +332,7 @@ void publishDeviceStatus() {
   mqttPublish("checkweigher/device/status", out);
 }
 
-// ================== MQTT CALLBACK ==================
+// Menangani pesan kontrol, threshold toleransi, dan setpoint RPM yang masuk dari broker MQTT.
 void mqttCallback(char* topicName, byte* payload, unsigned int len) {
   char msg[256];
   unsigned int n = len < sizeof(msg) - 1 ? len : sizeof(msg) - 1;
@@ -386,7 +381,7 @@ void mqttCallback(char* topicName, byte* payload, unsigned int len) {
   }
 }
 
-// ================== MQTT CONNECT ==================
+// Menghubungkan ESP32 ke broker MQTT serta mendaftarkan langganan topik perintah dan konfigurasi.
 void connectMqtt() {
   String clientId = "esp32-checkweigher-" + String((uint32_t)ESP.getEfuseMac(), HEX);
 
@@ -405,6 +400,7 @@ void connectMqtt() {
   }
 }
 
+// Menjaga koneksi klien MQTT tetap aktif dan mencoba menyambung ulang tiap 5 detik jika terputus.
 void mqttLoop() {
   static unsigned long lastTry = 0;
   if (WiFi.status() != WL_CONNECTED) return;
@@ -419,6 +415,7 @@ void mqttLoop() {
   }
 }
 
+// Mengirim data telemetri RPM dan heartbeat status perangkat sesuai interval waktu masing-masing.
 void telemetryLoop() {
   static unsigned long lastRPM = 0;
   unsigned long rpmInterval = conveyorRunning ? 1000 : 5000;
@@ -434,23 +431,25 @@ void telemetryLoop() {
   }
 }
 
-// ================== INTERRUPT ENCODER ==================
+// Menghitung pertambahan atau pengurangan pulsa rotary encoder melalui interrupt GPIO.
 void IRAM_ATTR handleEncoder() {
   if (digitalRead(ENC_B) > 0) encoderValue++;
   else encoderValue--;
 }
 
-// ================== FUNGSI BANTU ==================
+// Memperbarui state mesin aktif dan mencatat waktu transisi state.
 void changeState(State s) {
   state = s;
   stateStart = millis();
   Serial.printf("[STATE] -> %s\n", STATE_NAMES[s]);
 }
 
+// Memeriksa status deteksi objek pada sensor inframerah.
 bool irDetected() {
   return digitalRead(PIN_IR_SENSOR) == IR_ACTIVE_STATE;
 }
 
+// Menyalakan motor penggerak konveyor dengan nilai PWM awal.
 void startConveyor() {
   digitalWrite(IN1, HIGH);
   digitalWrite(IN2, LOW);
@@ -461,6 +460,7 @@ void startConveyor() {
   conveyorRunning = true;
 }
 
+// Menghentikan motor konveyor dan mereset akumulasi integral PID.
 void stopConveyor() {
   ledcWrite(ENA, 0);
   digitalWrite(IN1, LOW);
@@ -470,13 +470,14 @@ void stopConveyor() {
   conveyorRunning = false;
 }
 
+// Mengklasifikasikan berat barang menjadi kategori RINGAN, BERAT, atau ERROR.
 String determineCategory(float weight) {
   if (weight < toleranceMin) return "RINGAN";
   if (weight > toleranceMax) return "ERROR";
   return "BERAT";
 }
 
-// ================== PID KECEPATAN ==================
+// Menghitung kecepatan RPM aktual dari encoder dan memperbarui output PWM motor via kontrol PID.
 void updatePID() {
   static unsigned long lastT = 0;
   static long lastPulses = 0;
@@ -512,6 +513,7 @@ void updatePID() {
   ledcWrite(ENA, pwmOut);
 }
 
+// Menghentikan konveyor, mengembalikan posisi servo, dan mereset variabel siklus ke WAIT_RFID.
 void resetCycle() {
   stopConveyor();
   sortingServo.write(SERVO_STRAIGHT);
@@ -525,6 +527,7 @@ void resetCycle() {
   Serial.println("\n[INFO] Siap! Silakan scan RFID barang (atau ketik 'k' kalibrasi / 't' tare).");
 }
 
+// Membaca perintah teks dari Serial Monitor untuk tare ('t'), kalibrasi ('k'), atau cek berat ('w').
 void handleSerialCommand() {
   if (Serial.available() > 0) {
     String input = Serial.readStringUntil('\n');
@@ -536,7 +539,6 @@ void handleSerialCommand() {
       runInteractiveCalibration();
       resetCycle();
     } else if (input.equalsIgnoreCase("w")) {
-      // Cek cepat pembacaan raw & gram saat ini via Serial Monitor
       long r = bacaRawStabil();
       float g = getWeightGram();
       Serial.printf("[CEK] Raw: %ld | Berat: %.1f g | CalFactor: %.4f\n", r, g, CALIBRATION_FACTOR);
@@ -544,7 +546,7 @@ void handleSerialCommand() {
   }
 }
 
-// ================== SETUP ==================
+// Menginisialisasi seluruh pin hardware, sensor, koneksi WiFi, NTP, dan konfigurasi MQTT.
 void setup() {
   Serial.begin(115200);
   while (!Serial);
@@ -616,7 +618,7 @@ void setup() {
   resetCycle();
 }
 
-// ================== LOOP ==================
+// Menjalankan rutinitas background dan alur state machine checkweigher secara terus-menerus.
 void loop() {
   mqttLoop();
   telemetryLoop();

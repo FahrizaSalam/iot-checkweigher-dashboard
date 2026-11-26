@@ -16,7 +16,7 @@ import (
 
 type HistoryController struct{}
 
-// Index GET /history — riwayat penimbangan dengan filter tanggal, kategori, dan pagination.
+// Index menampilkan daftar riwayat penimbangan dengan filter kategori, tanggal, dan pagination.
 func (ctl *HistoryController) Index(c fiber.Ctx) error {
 	category := strings.TrimSpace(c.Query("category"))
 	startDate := strings.TrimSpace(c.Query("start_date"))
@@ -61,7 +61,7 @@ func (ctl *HistoryController) Index(c fiber.Ctx) error {
 	})
 }
 
-// ExportCSV GET /history/export — mengunduh file CSV hasil penimbangan.
+// ExportCSV mengekspor data riwayat penimbangan terfilter dalam format file CSV.
 func (ctl *HistoryController) ExportCSV(c fiber.Ctx) error {
 	category := strings.TrimSpace(c.Query("category"))
 	startDate := strings.TrimSpace(c.Query("start_date"))

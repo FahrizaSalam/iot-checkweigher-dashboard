@@ -13,22 +13,18 @@ import (
 
 type DashboardController struct{}
 
-// Index menampilkan halaman utama Dashboard Checkweigher sesuai desain referensi.
+// Index menyiapkan data ringkasan penimbangan, grafik RPM, dan status perangkat untuk halaman dashboard.
 func (ctl *DashboardController) Index(c fiber.Ctx) error {
-	// 1. Ambil data penimbangan terakhir
 	var latestWeighing models.Weighing
 	config.DB.Preload("Item").Order("measured_at desc").First(&latestWeighing)
 
-	// 2. Ambil data statistik hari ini
 	todayStr := time.Now().Format("2006-01-02")
 	var todayStats models.DailyStats
 	config.DB.Where("stat_date = ?", todayStr).First(&todayStats)
 
-	// 3. Ambil data status perangkat
 	var devices []models.DeviceStatus
 	config.DB.Find(&devices)
 
-	// Cek status sistem & ESP32
 	allOnline := len(devices) > 0
 	esp32Online := false
 	for _, d := range devices {
@@ -40,21 +36,18 @@ func (ctl *DashboardController) Index(c fiber.Ctx) error {
 		}
 	}
 
-	// 4. Ambil 30 log penimbangan terakhir untuk grafik berat
 	var recentWeighings []models.Weighing
 	config.DB.Order("measured_at desc").Limit(30).Find(&recentWeighings)
 	if recentWeighings == nil {
 		recentWeighings = []models.Weighing{}
 	}
 
-	// 5. Ambil 30 log telemetri RPM terakhir untuk grafik PID
 	var recentConveyorLogs []models.ConveyorLog
 	config.DB.Order("recorded_at desc").Limit(30).Find(&recentConveyorLogs)
 	if recentConveyorLogs == nil {
 		recentConveyorLogs = []models.ConveyorLog{}
 	}
 
-	// 6. Ambil konfigurasi aktif (threshold & setpoint)
 	var activeProduct models.Product
 	config.DB.Where("is_active = ?", true).First(&activeProduct)
 	if activeProduct.ID == 0 {
@@ -68,7 +61,6 @@ func (ctl *DashboardController) Index(c fiber.Ctx) error {
 		}
 	}
 
-	// Serialize data chart untuk inisialisasi awal di browser menggunakan template.JS agar tidak di-escape
 	weightChartJSON, _ := json.Marshal(recentWeighings)
 	rpmChartJSON, _ := json.Marshal(recentConveyorLogs)
 

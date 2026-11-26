@@ -7,7 +7,7 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/csrf"
 )
 
-// View merender template dengan data bersama (shared data) yang selalu tersedia di semua halaman.
+// View merender template HTML beserta data bersama seperti nama aplikasi, token CSRF, dan pesan flash.
 func View(c fiber.Ctx, name string, data fiber.Map) error {
 	if data == nil {
 		data = fiber.Map{}
@@ -18,7 +18,6 @@ func View(c fiber.Ctx, name string, data fiber.Map) error {
 	if _, ok := data["Errors"]; !ok {
 		data["Errors"] = map[string]string{}
 	}
-	// Flash message dari redirect sebelumnya
 	if msg := c.Redirect().Message("success"); msg.Value != "" {
 		data["FlashSuccess"] = msg.Value
 	}

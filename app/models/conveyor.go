@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// ConveyorLog mewakili tabel "conveyor_logs" (telemetri RPM aktual vs setpoint vs PWM dari encoder).
+// ConveyorLog merepresentasikan tabel conveyor_logs untuk menyimpan telemetri RPM dan PWM motor.
 type ConveyorLog struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	ActualRPM   float64   `gorm:"type:float;default:0" json:"actual_rpm"`

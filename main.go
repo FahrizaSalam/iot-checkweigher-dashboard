@@ -14,14 +14,11 @@ import (
 	"github.com/gofiber/fiber/v3"
 )
 
+// main menginisialisasi konfigurasi, database, koneksi MQTT, dan server web Fiber.
 func main() {
 	config.LoadEnv()
 	config.ConnectDatabase()
 
-	// Perintah CLI ala "php artisan":
-	// go run . migrate -> buat tabel
-	// go run . migrate:fresh -> hapus semua tabel lalu buat ulang
-	// go run . seed -> isi data contoh
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "migrate":
@@ -36,10 +33,8 @@ func main() {
 		return
 	}
 
-	// 1. Jalankan WebSocket Hub di background
 	go services.Hub.Run()
 
-	// 2. Hubungkan ke Broker HiveMQ (Public / Cloud) & auto-subscribe tiap kali connect/reconnect
 	services.InitMQTT(nil)
 	mqttClient, _ := config.ConnectMQTT(func() {
 		services.MQTT.SetClient(config.GetMQTTClient())
@@ -47,11 +42,9 @@ func main() {
 	})
 	services.MQTT.SetClient(mqttClient)
 
-	// 3. Jalankan Web Server Fiber
 	app := bootstrap.NewApp()
 	routes.Web(app)
 
-	// 404 fallback untuk route yang tidak terdaftar (harus paling akhir)
 	app.Use(func(c fiber.Ctx) error { return fiber.ErrNotFound })
 
 	port := config.Env("APP_PORT", "3000")

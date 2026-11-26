@@ -7,7 +7,7 @@ import (
 	"strconv"
 )
 
-// Pagination menyimpan informasi halaman (mirip ->paginate(10) di Laravel).
+// Pagination menyimpan metadata halaman untuk tampilan daftar data.
 type Pagination struct {
 	Page     int
 	PerPage  int
@@ -19,7 +19,7 @@ type Pagination struct {
 	Query    url.Values
 }
 
-// Paginate menghitung data pagination dari nomor halaman & total data.
+// Paginate menghitung batas halaman dan daftar nomor halaman berdasarkan total data.
 func Paginate(page, perPage int, total int64) Pagination {
 	if perPage < 1 {
 		perPage = 10
@@ -45,18 +45,27 @@ func Paginate(page, perPage int, total int64) Pagination {
 	return p
 }
 
-// Offset dipakai untuk query LIMIT ... OFFSET ...
+// Offset menghitung posisi awal baris untuk query database.
 func (p Pagination) Offset() int {
 	return (p.Page - 1) * p.PerPage
 }
 
+// HasPages memeriksa apakah jumlah halaman lebih dari satu.
 func (p Pagination) HasPages() bool { return p.LastPage > 1 }
-func (p Pagination) HasPrev() bool  { return p.Page > 1 }
-func (p Pagination) HasNext() bool  { return p.Page < p.LastPage }
-func (p Pagination) PrevPage() int  { return p.Page - 1 }
-func (p Pagination) NextPage() int  { return p.Page + 1 }
 
-// WithQuery menyimpan parameter pencarian agar tidak hilang saat pindah halaman.
+// HasPrev memeriksa apakah terdapat halaman sebelumnya.
+func (p Pagination) HasPrev() bool { return p.Page > 1 }
+
+// HasNext memeriksa apakah terdapat halaman berikutnya.
+func (p Pagination) HasNext() bool { return p.Page < p.LastPage }
+
+// PrevPage mengembalikan nomor halaman sebelumnya.
+func (p Pagination) PrevPage() int { return p.Page - 1 }
+
+// NextPage mengembalikan nomor halaman berikutnya.
+func (p Pagination) NextPage() int { return p.Page + 1 }
+
+// WithQuery menyertakan parameter query string agar filter tetap terbawa antar halaman.
 func (p Pagination) WithQuery(params map[string]string) Pagination {
 	p.Query = url.Values{}
 	for k, v := range params {
@@ -67,7 +76,7 @@ func (p Pagination) WithQuery(params map[string]string) Pagination {
 	return p
 }
 
-// Link menghasilkan URL "?page=2&q=..." untuk nomor halaman tertentu.
+// Link menyusun URL query string untuk nomor halaman tertentu.
 func (p Pagination) Link(page int) template.URL {
 	q := url.Values{}
 	for k, v := range p.Query {

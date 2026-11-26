@@ -6,7 +6,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 )
 
-// MethodOverride membaca field tersembunyi "_method" pada form HTML (mirip @method di Laravel).
+// MethodOverride mengubah metode HTTP POST menjadi PUT, PATCH, atau DELETE berdasarkan field _method.
 func MethodOverride() fiber.Handler {
 	return func(c fiber.Ctx) error {
 		if c.Method() == fiber.MethodPost {

@@ -22,6 +22,7 @@ type MQTTService struct {
 
 var MQTT *MQTTService
 
+// InitMQTT menginisialisasi instance layanan MQTT dan memulai langganan topik jika sudah terhubung.
 func InitMQTT(client mqtt.Client) *MQTTService {
 	if MQTT == nil {
 		MQTT = &MQTTService{client: client}
@@ -34,7 +35,7 @@ func InitMQTT(client mqtt.Client) *MQTTService {
 	return MQTT
 }
 
-// SetClient memperbarui referensi client MQTT secara thread-safe saat koneksi terbentuk atau reconnect.
+// SetClient memperbarui referensi client MQTT secara thread-safe.
 func (s *MQTTService) SetClient(client mqtt.Client) {
 	if s == nil {
 		return
@@ -44,6 +45,7 @@ func (s *MQTTService) SetClient(client mqtt.Client) {
 	s.mu.Unlock()
 }
 
+// getClient membaca referensi client MQTT secara thread-safe.
 func (s *MQTTService) getClient() mqtt.Client {
 	if s == nil {
 		return nil
@@ -53,23 +55,21 @@ func (s *MQTTService) getClient() mqtt.Client {
 	return s.client
 }
 
+// Subscribe mendaftarkan callback untuk topik penimbangan, telemetri RPM, dan status perangkat.
 func (s *MQTTService) Subscribe() {
 	client := s.getClient()
 	if client == nil || !client.IsConnected() {
 		return
 	}
 
-	// 1. Subscribe ke data penimbangan barang
 	client.Subscribe("checkweigher/weighing", 1, func(c mqtt.Client, m mqtt.Message) {
 		s.handleWeighing(m.Payload())
 	})
 
-	// 2. Subscribe ke telemetri RPM conveyor PID
 	client.Subscribe("checkweigher/conveyor/rpm", 0, func(c mqtt.Client, m mqtt.Message) {
 		s.handleConveyorRPM(m.Payload())
 	})
 
-	// 3. Subscribe ke status perangkat
 	client.Subscribe("checkweigher/device/status", 0, func(c mqtt.Client, m mqtt.Message) {
 		s.handleDeviceStatus(m.Payload())
 	})
@@ -77,6 +77,7 @@ func (s *MQTTService) Subscribe() {
 	log.Println("[MQTT] Berlangganan topik penimbangan, telemetri RPM, dan status perangkat")
 }
 
+// handleWeighing memproses pesan hasil penimbangan, menyimpan ke database, dan menyiarkan ke dashboard.
 func (s *MQTTService) handleWeighing(payload []byte) {
 	var data struct {
 		RfidUID       string  `json:"rfid_uid"`
@@ -90,13 +91,11 @@ func (s *MQTTService) handleWeighing(payload []byte) {
 		return
 	}
 
-	// Ambil konfigurasi threshold aktif
 	var product models.Product
 	if err := config.DB.Where("is_active = ?", true).First(&product).Error; err != nil {
 		product = models.Product{ToleranceMin: 300.0, ToleranceMax: 1000.0}
 	}
 
-	// Tentukan Kategori: RINGAN (< 300g), BERAT (300g - 1000g), ERROR (> 1000g)
 	category := "BERAT"
 	if data.Weight < product.ToleranceMin {
 		category = "RINGAN"
@@ -111,7 +110,6 @@ func (s *MQTTService) handleWeighing(payload []byte) {
 		}
 	}
 
-	// Cari ID barang berdasarkan RFID UID
 	var item models.Item
 	var itemID *uint
 	if data.RfidUID != "" {
@@ -134,7 +132,6 @@ func (s *MQTTService) handleWeighing(payload []byte) {
 		return
 	}
 
-	// Update statistik harian secara inkremental
 	todayStr := measuredAt.Format("2006-01-02")
 	ringanInc, beratInc, errorInc := 0, 0, 0
 	switch category {
@@ -168,12 +165,10 @@ func (s *MQTTService) handleWeighing(payload []byte) {
 		MaxWeight:    data.Weight,
 	})
 
-	// Preload item untuk WebSocket broadcast
 	if itemID != nil {
 		weighing.Item = &item
 	}
 
-	// Broadcast via WebSocket ke dashboard
 	Hub.Broadcast(map[string]interface{}{
 		"type": "weighing",
 		"data": weighing,
@@ -182,6 +177,7 @@ func (s *MQTTService) handleWeighing(payload []byte) {
 	log.Printf("[MQTT] Data penimbangan tersimpan: ID=%d, Berat=%.1fg, Kategori=%s", weighing.ID, weighing.Weight, weighing.Category)
 }
 
+// handleConveyorRPM mencatat telemetri RPM conveyor dan menyiarkannya ke dashboard.
 func (s *MQTTService) handleConveyorRPM(payload []byte) {
 	var data struct {
 		ActualRPM float64 `json:"actual_rpm"`
@@ -215,13 +211,13 @@ func (s *MQTTService) handleConveyorRPM(payload []byte) {
 
 	config.DB.Create(&logEntry)
 
-	// Broadcast via WebSocket
 	Hub.Broadcast(map[string]interface{}{
 		"type": "conveyor_rpm",
 		"data": logEntry,
 	})
 }
 
+// handleDeviceStatus memperbarui status dan nilai terakhir sensor di database serta menyiarkannya.
 func (s *MQTTService) handleDeviceStatus(payload []byte) {
 	var devices []models.DeviceStatus
 	if err := json.Unmarshal(payload, &devices); err != nil {
@@ -249,6 +245,7 @@ func (s *MQTTService) handleDeviceStatus(payload []byte) {
 	})
 }
 
+// publishJSON mengonversi data ke JSON dan mempublikasikannya ke topik MQTT tertentu.
 func (s *MQTTService) publishJSON(topic string, payloadData interface{}) error {
 	client := s.getClient()
 	if client == nil || !client.IsConnected() {

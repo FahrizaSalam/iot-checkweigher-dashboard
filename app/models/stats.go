@@ -2,10 +2,10 @@ package models
 
 import "time"
 
-// DailyStats mewakili tabel "daily_stats" (agregasi statistik harian).
+// DailyStats merepresentasikan tabel daily_stats untuk ringkasan statistik penimbangan harian.
 type DailyStats struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
-	StatDate     string    `gorm:"size:10;not null;uniqueIndex" json:"stat_date"` // YYYY-MM-DD
+	StatDate     string    `gorm:"size:10;not null;uniqueIndex" json:"stat_date"`
 	TotalWeighed int       `gorm:"default:0" json:"total_weighed"`
 	TotalRingan  int       `gorm:"default:0" json:"total_ringan"`
 	TotalBerat   int       `gorm:"default:0" json:"total_berat"`
@@ -16,6 +16,7 @@ type DailyStats struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// TableName menentukan nama tabel database untuk model DailyStats.
 func (DailyStats) TableName() string {
 	return "daily_stats"
 }

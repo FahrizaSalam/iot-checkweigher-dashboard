@@ -9,10 +9,10 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// DB adalah koneksi database global (mirip facade DB di Laravel).
+// DB menyimpan instance koneksi database GORM global.
 var DB *gorm.DB
 
-// ConnectDatabase membuka koneksi ke MySQL berdasarkan nilai di .env.
+// ConnectDatabase membuka koneksi ke server MySQL berdasarkan konfigurasi .env.
 func ConnectDatabase() {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
 		Env("DB_USERNAME", "root"),
@@ -24,7 +24,7 @@ func ConnectDatabase() {
 
 	logLevel := logger.Silent
 	if Env("APP_ENV", "local") == "local" {
-		logLevel = logger.Info // tampilkan query SQL di terminal saat development
+		logLevel = logger.Info
 	}
 
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{

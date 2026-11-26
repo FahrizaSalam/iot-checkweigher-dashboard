@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// Item mewakili tabel "items" (mapping RFID tag ke kode barang).
+// Item merepresentasikan tabel items untuk pemetaan tag RFID dan informasi barang.
 type Item struct {
 	ID          uint       `gorm:"primaryKey" json:"id"`
 	ItemCode    string     `gorm:"size:20;not null;uniqueIndex" json:"item_code"`

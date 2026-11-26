@@ -19,21 +19,19 @@ import (
 	"github.com/gofiber/template/html/v2"
 )
 
-// NewApp menyiapkan aplikasi Fiber: view engine, middleware, static file (mirip bootstrap/app.php).
+// NewApp menginisialisasi instance Fiber beserta template HTML, middleware, dan file statis.
 func NewApp() *fiber.App {
-	// 1. View engine: folder resources/views, ekstensi .html
 	engine := html.New("./resources/views", ".html")
-	engine.Reload(config.Env("APP_ENV", "local") == "local") // auto reload saat development
+	engine.Reload(config.Env("APP_ENV", "local") == "local")
 	engine.AddFunc("tanggal", helpers.Tanggal)
 	engine.AddFunc("formatWeight", helpers.FormatWeight)
 	engine.AddFunc("hasPrefix", strings.HasPrefix)
 	engine.AddFunc("add", func(a, b int) int { return a + b })
 
-	// 2. Instance Fiber (percaya header proxy lokal/private seperti Nginx aaPanel untuk X-Forwarded-Proto/Host)
 	app := fiber.New(fiber.Config{
 		AppName:      config.Env("APP_NAME", "Checkweigher IoT"),
 		Views:        engine,
-		ViewsLayout:  "layouts/app", // layout default untuk semua c.Render()
+		ViewsLayout:  "layouts/app",
 		ErrorHandler: errorHandler,
 		TrustProxy:   true,
 		TrustProxyConfig: fiber.TrustProxyConfig{
@@ -42,11 +40,10 @@ func NewApp() *fiber.App {
 		},
 	})
 
-	// 3. Middleware global
-	app.Use(middleware.MethodOverride()) // _method=PUT/DELETE
-	app.Use(recover.New())               // cegah server panic
-	app.Use(logger.New())                // log setiap request
-	app.Use(csrf.New(csrf.Config{        // proteksi CSRF
+	app.Use(middleware.MethodOverride())
+	app.Use(recover.New())
+	app.Use(logger.New())
+	app.Use(csrf.New(csrf.Config{
 		Extractor:      extractors.Chain(extractors.FromHeader("X-CSRF-Token"), extractors.FromForm("_csrf")),
 		CookieName:     "csrf_token",
 		CookiePath:     "/",
@@ -64,13 +61,12 @@ func NewApp() *fiber.App {
 		},
 	}))
 
-	// 4. File statis: /public
 	app.Use("/public", static.New("./public"))
 
 	return app
 }
 
-// errorHandler menampilkan halaman error (404, 500, dst).
+// errorHandler menampilkan halaman error sesuai kode status HTTP.
 func errorHandler(c fiber.Ctx, err error) error {
 	code := fiber.StatusInternalServerError
 	var e *fiber.Error

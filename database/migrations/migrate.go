@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// Migrate membuat / memperbarui tabel sesuai struct model GORM (mirip "php artisan migrate").
+// Migrate membuat atau memperbarui tabel database sesuai struct model.
 func Migrate(db *gorm.DB) {
 	err := db.AutoMigrate(
 		&models.Item{},
@@ -23,7 +23,7 @@ func Migrate(db *gorm.DB) {
 	log.Println("Migrasi tabel database selesai")
 }
 
-// Fresh menghapus semua tabel lalu migrasi ulang (mirip "php artisan migrate:fresh").
+// Fresh menghapus seluruh tabel lalu menjalankan migrasi ulang dari awal.
 func Fresh(db *gorm.DB) {
 	db.Exec("SET FOREIGN_KEY_CHECKS = 0")
 	if err := db.Migrator().DropTable(

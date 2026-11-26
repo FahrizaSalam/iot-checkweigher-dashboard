@@ -1,9 +1,8 @@
-// dashboard.js - Logika client-side untuk dashboard real-time Checkweigher
+// Menginisialisasi grafik real-time, koneksi WebSocket, dan handler perintah dashboard.
 document.addEventListener('DOMContentLoaded', function () {
     const configEl = document.getElementById('dashboardConfig');
     if (!configEl) return;
 
-    // --- 1. AMBIL KONFIGURASI DAN DATA DARI DOM ---
     const minThreshold = parseFloat(configEl.getAttribute('data-min-threshold')) || 300;
     const maxThreshold = parseFloat(configEl.getAttribute('data-max-threshold')) || 1000;
     const defaultSetpoint = parseFloat(configEl.getAttribute('data-setpoint')) || 60;
@@ -27,7 +26,6 @@ document.addEventListener('DOMContentLoaded', function () {
         initialConveyorLogs = [];
     }
 
-    // --- 2. SETUP CHART 1: GRAFIK BERAT TERHADAP WAKTU ---
     const canvasWeight = document.getElementById('weightChart');
     let weightChart = null;
 
@@ -85,7 +83,6 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // --- 3. SETUP CHART 2: GRAFIK RPM vs SETPOINT & PWM ---
     const canvasRpm = document.getElementById('rpmChart');
     let rpmChart = null;
 
@@ -132,11 +129,11 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // --- 4. WEBSOCKET CLIENT UNTUK REAL-TIME TELEMETRI ---
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
     let socket = null;
 
+    // Membuka koneksi WebSocket ke server untuk menerima update penimbangan, RPM, dan status perangkat.
     function connectWebSocket() {
         socket = new WebSocket(wsUrl);
 
@@ -155,7 +152,6 @@ document.addEventListener('DOMContentLoaded', function () {
             try {
                 const message = JSON.parse(event.data);
 
-                // A. Data Penimbangan Baru Masuk
                 if (message.type === 'weighing') {
                     const w = message.data;
                     const weightVal = typeof w.weight === 'number' ? w.weight : parseFloat(w.weight) || 0;
@@ -204,7 +200,6 @@ document.addEventListener('DOMContentLoaded', function () {
                     const totEl = document.getElementById('statTotal');
                     if (totEl) totEl.innerText = (parseInt(totEl.innerText || '0', 10) + 1);
 
-                    // Tambah data ke grafik berat
                     if (weightChart) {
                         const timeStr = new Date().toLocaleTimeString();
                         weightChart.data.labels.push(timeStr);
@@ -221,7 +216,6 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 }
 
-                // B. Telemetri RPM Baru
                 else if (message.type === 'conveyor_rpm') {
                     const l = message.data;
                     const actualRpm = typeof l.actual_rpm === 'number' ? l.actual_rpm : parseFloat(l.actual_rpm) || 0;
@@ -244,7 +238,6 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 }
 
-                // C. Status Perangkat Baru (Heartbeat)
                 else if (message.type === 'device_status') {
                     const devices = Array.isArray(message.data) ? message.data : [message.data];
                     let allOk = true;
@@ -287,7 +280,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     connectWebSocket();
 
-    // --- 5. FUNGSI KIRIM PERINTAH (START / STOP / TARE) ---
+    // Mengirim perintah kendali (START, STOP, TARE) ke server melalui endpoint API.
     window.sendCommand = function (cmd) {
         const feedback = document.getElementById('commandFeedback');
         if (feedback) {

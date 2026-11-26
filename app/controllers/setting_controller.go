@@ -14,7 +14,7 @@ import (
 
 type SettingController struct{}
 
-// Index GET /settings — menampilkan form konfigurasi threshold & status perangkat.
+// Index menampilkan form pengaturan threshold, setpoint RPM, dan status perangkat.
 func (ctl *SettingController) Index(c fiber.Ctx) error {
 	var product models.Product
 	if err := config.DB.Where("is_active = ?", true).First(&product).Error; err != nil {
@@ -45,7 +45,7 @@ func (ctl *SettingController) Index(c fiber.Ctx) error {
 	})
 }
 
-// Update POST/PUT /settings — simpan perubahan threshold & publish ke ESP32.
+// Update menyimpan konfigurasi threshold dan setpoint ke database serta mengirimkannya ke ESP32.
 func (ctl *SettingController) Update(c fiber.Ctx) error {
 	var req requests.ProductRequest
 	if err := c.Bind().Form(&req); err != nil {
@@ -84,7 +84,6 @@ func (ctl *SettingController) Update(c fiber.Ctx) error {
 
 	config.DB.Save(&product)
 
-	// Kirim konfigurasi baru ke ESP32 via MQTT
 	if services.MQTT != nil {
 		if err := services.MQTT.SendThreshold(product.ToleranceMin, product.ToleranceMax); err != nil {
 			return c.Redirect().With("error", "Pengaturan tersimpan di database, namun gagal sinkron ke ESP32: "+err.Error()).To("/settings")

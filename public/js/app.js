@@ -1,4 +1,4 @@
-// app.js - Helper script untuk modal hapus dan interaksi dashboard
+// Mengatur pembukaan dan penutupan modal konfirmasi hapus data.
 document.addEventListener('DOMContentLoaded', function () {
     const deleteModal = document.getElementById('deleteModal');
     const deleteForm = document.getElementById('deleteForm');
