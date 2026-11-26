@@ -1,13 +1,12 @@
-<div class="space-y-8">
+<div class="max-w-3xl mx-auto space-y-8">
     <div>
-        <h1 class="text-2xl font-black text-slate-800 tracking-tight">Pengaturan Sistem & Perangkat</h1>
-        <p class="text-sm text-slate-500 mt-1">Konfigurasi batas threshold penyortiran, setpoint kecepatan motor konveyor, dan pantau status sensor.</p>
+        <h1 class="text-2xl font-black text-slate-800 tracking-tight">Pengaturan Sistem</h1>
+        <p class="text-sm text-slate-500 mt-1">Konfigurasi batas threshold penyortiran dan setpoint kecepatan motor konveyor.</p>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        <div class="lg:col-span-7 bg-white rounded-2xl p-6 sm:p-8 border border-slate-100 shadow-sm">
-            <h2 class="text-lg font-bold text-slate-800 mb-1">Parameter Threshold & Kontrol</h2>
-            <p class="text-xs text-slate-400 mb-6">Perubahan pada form ini akan otomatis di-publish ke broker HiveMQ untuk diterapkan langsung oleh mikrokontroler ESP32.</p>
+    <div class="bg-white rounded-2xl p-6 sm:p-8 border border-slate-100 shadow-sm">
+        <h2 class="text-lg font-bold text-slate-800 mb-1">Parameter Threshold & Kontrol</h2>
+        <p class="text-xs text-slate-400 mb-6">Perubahan pada form ini akan otomatis di-publish ke broker HiveMQ untuk diterapkan langsung oleh mikrokontroler ESP32.</p>
 
             <form method="POST" action="/settings">
                 <input type="hidden" name="_csrf" value="{{.CsrfToken}}">
@@ -104,39 +103,6 @@
                     </div>
                 </div>
             </form>
-        </div>
-
-        <div class="lg:col-span-5 bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
-            <h2 class="text-lg font-bold text-slate-800 mb-1">Status Sensor &amp; Aktuator</h2>
-            <p class="text-xs text-slate-400 mb-4">Pemantauan detak sinyal (heartbeat) komponen IoT.</p>
-
-            <div class="divide-y divide-slate-100">
-                {{range .Devices}}
-                <div class="py-3.5 flex items-center justify-between">
-                    <div>
-                        <div class="font-semibold text-sm text-slate-800">{{.DeviceName}}</div>
-                        <div class="text-xs text-slate-400 font-mono">{{.DeviceType}}</div>
-                    </div>
-                    <div class="text-right">
-                        {{if eq .Status "ONLINE"}}
-                            <span class="inline-block px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800">
-                                ONLINE
-                            </span>
-                        {{else}}
-                            <span class="inline-block px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-slate-100 text-slate-600">
-                                {{.Status}}
-                            </span>
-                        {{end}}
-                        <div class="text-[11px] text-slate-400 mt-1 font-mono">
-                            {{if .LastValue}}Nilai: {{.LastValue}}{{else}}-{{end}}
-                        </div>
-                    </div>
-                </div>
-                {{else}}
-                <p class="text-xs text-slate-400 py-4 text-center">Belum ada perangkat terdaftar di database.</p>
-                {{end}}
-            </div>
-        </div>
     </div>
 </div>
 

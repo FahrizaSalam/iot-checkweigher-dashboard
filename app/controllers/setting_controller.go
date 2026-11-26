@@ -28,13 +28,9 @@ func (ctl *SettingController) Index(c fiber.Ctx) error {
 		}
 	}
 
-	var devices []models.DeviceStatus
-	config.DB.Order("id asc").Find(&devices)
-
 	return helpers.View(c, "settings/index", fiber.Map{
 		"Title":   "Pengaturan",
 		"Product": product,
-		"Devices": devices,
 		"Form": requests.ProductRequest{
 			Name:         product.Name,
 			TargetWeight: product.TargetWeight,
@@ -60,15 +56,11 @@ func (ctl *SettingController) Update(c fiber.Ctx) error {
 	}
 
 	if len(errs) > 0 {
-		var devices []models.DeviceStatus
-		config.DB.Order("id asc").Find(&devices)
-
 		c.Status(fiber.StatusUnprocessableEntity)
 		return helpers.View(c, "settings/index", fiber.Map{
-			"Title":   "Pengaturan",
-			"Devices": devices,
-			"Form":    req,
-			"Errors":  errs,
+			"Title":  "Pengaturan",
+			"Form":   req,
+			"Errors": errs,
 		})
 	}
 

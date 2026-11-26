@@ -133,6 +133,39 @@ document.addEventListener('DOMContentLoaded', function () {
     const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
     let socket = null;
 
+    let espOfflineTimer = null;
+
+    // Memperbarui badge status sistem dan ESP32 dengan timeout offline otomatis 15 detik.
+    function updateEsp32Badges(online) {
+        const bStatus = document.getElementById('badgeStatus');
+        const tStatus = document.getElementById('textStatus');
+        if (bStatus && tStatus) {
+            bStatus.className = 'p-4 rounded-2xl flex items-center justify-center gap-2 font-bold text-white shadow-sm transition-colors ' + (online ? 'bg-emerald-600' : 'bg-amber-600');
+            tStatus.innerText = online ? 'AKTIF' : 'STANDBY';
+        }
+
+        const bEsp = document.getElementById('badgeEsp32');
+        const tEsp = document.getElementById('textEsp32');
+        if (bEsp && tEsp) {
+            bEsp.className = 'p-4 rounded-2xl flex items-center justify-center gap-2 font-bold text-white shadow-sm transition-colors ' + (online ? 'bg-blue-600' : 'bg-slate-500');
+            const dotEsp = bEsp.querySelector('span');
+            if (dotEsp) dotEsp.className = 'w-3 h-3 rounded-full ' + (online ? 'bg-emerald-400' : 'bg-rose-400');
+            tEsp.innerText = online ? 'Online' : 'Offline';
+        }
+
+        if (espOfflineTimer) clearTimeout(espOfflineTimer);
+        if (online) {
+            espOfflineTimer = setTimeout(function () {
+                updateEsp32Badges(false);
+            }, 15000);
+        }
+    }
+
+    const initialEspText = document.getElementById('textEsp32');
+    if (initialEspText && initialEspText.innerText.trim() === 'Online') {
+        updateEsp32Badges(true);
+    }
+
     // Membuka koneksi WebSocket ke server untuk menerima update penimbangan, RPM, dan status perangkat.
     function connectWebSocket() {
         socket = new WebSocket(wsUrl);
@@ -153,6 +186,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 const message = JSON.parse(event.data);
 
                 if (message.type === 'weighing') {
+                    updateEsp32Badges(true);
                     const w = message.data;
                     const weightVal = typeof w.weight === 'number' ? w.weight : parseFloat(w.weight) || 0;
                     const speedVal = typeof w.conveyor_speed === 'number' ? w.conveyor_speed : parseFloat(w.conveyor_speed) || 0;
@@ -217,6 +251,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 else if (message.type === 'conveyor_rpm') {
+                    updateEsp32Badges(true);
                     const l = message.data;
                     const actualRpm = typeof l.actual_rpm === 'number' ? l.actual_rpm : parseFloat(l.actual_rpm) || 0;
                     const setpointRpm = typeof l.setpoint_rpm === 'number' ? l.setpoint_rpm : parseFloat(l.setpoint_rpm) || defaultSetpoint;
@@ -240,26 +275,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 else if (message.type === 'device_status') {
                     const devices = Array.isArray(message.data) ? message.data : [message.data];
-                    let allOk = true;
                     let espOnline = false;
                     devices.forEach(d => {
-                        if (d.status !== 'ONLINE') allOk = false;
                         if (d.device_type === 'loadcell' && d.status === 'ONLINE') espOnline = true;
                     });
-
-                    const bStatus = document.getElementById('badgeStatus');
-                    const tStatus = document.getElementById('textStatus');
-                    if (bStatus && tStatus) {
-                        bStatus.className = 'p-4 rounded-2xl flex items-center justify-center gap-2 font-bold text-white shadow-sm transition-colors ' + (allOk ? 'bg-emerald-600' : 'bg-amber-600');
-                        tStatus.innerText = allOk ? 'AKTIF' : 'STANDBY';
-                    }
-
-                    const bEsp = document.getElementById('badgeEsp32');
-                    const tEsp = document.getElementById('textEsp32');
-                    if (bEsp && tEsp) {
-                        bEsp.className = 'p-4 rounded-2xl flex items-center justify-center gap-2 font-bold text-white shadow-sm transition-colors ' + (espOnline ? 'bg-blue-600' : 'bg-slate-500');
-                        tEsp.innerText = espOnline ? 'Online' : 'Offline';
-                    }
+                    updateEsp32Badges(espOnline);
                 }
             } catch (err) {
                 console.error('Error parse WebSocket message:', err);

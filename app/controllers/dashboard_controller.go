@@ -13,7 +13,7 @@ import (
 
 type DashboardController struct{}
 
-// Index menyiapkan data ringkasan penimbangan, grafik RPM, dan status perangkat untuk halaman dashboard.
+// Index menyiapkan data ringkasan penimbangan dan grafik RPM untuk halaman dashboard.
 func (ctl *DashboardController) Index(c fiber.Ctx) error {
 	var latestWeighing models.Weighing
 	config.DB.Preload("Item").Order("measured_at desc").First(&latestWeighing)
@@ -21,20 +21,6 @@ func (ctl *DashboardController) Index(c fiber.Ctx) error {
 	todayStr := time.Now().Format("2006-01-02")
 	var todayStats models.DailyStats
 	config.DB.Where("stat_date = ?", todayStr).First(&todayStats)
-
-	var devices []models.DeviceStatus
-	config.DB.Find(&devices)
-
-	allOnline := len(devices) > 0
-	esp32Online := false
-	for _, d := range devices {
-		if d.Status != "ONLINE" {
-			allOnline = false
-		}
-		if d.DeviceType == "loadcell" && d.Status == "ONLINE" {
-			esp32Online = true
-		}
-	}
 
 	var recentWeighings []models.Weighing
 	config.DB.Order("measured_at desc").Limit(30).Find(&recentWeighings)
@@ -47,6 +33,10 @@ func (ctl *DashboardController) Index(c fiber.Ctx) error {
 	if recentConveyorLogs == nil {
 		recentConveyorLogs = []models.ConveyorLog{}
 	}
+
+	esp32Online := (len(recentConveyorLogs) > 0 && time.Since(recentConveyorLogs[0].RecordedAt) <= 15*time.Second) ||
+		(len(recentWeighings) > 0 && time.Since(recentWeighings[0].MeasuredAt) <= 15*time.Second)
+	allOnline := esp32Online
 
 	var activeProduct models.Product
 	config.DB.Where("is_active = ?", true).First(&activeProduct)
@@ -70,7 +60,6 @@ func (ctl *DashboardController) Index(c fiber.Ctx) error {
 		"Title":           "Dashboard",
 		"LatestWeighing":  latestWeighing,
 		"TodayStats":      todayStats,
-		"Devices":         devices,
 		"AllOnline":       allOnline,
 		"Esp32Online":     esp32Online,
 		"ActiveProduct":   activeProduct,
