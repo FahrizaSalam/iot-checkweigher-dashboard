@@ -86,8 +86,12 @@ func (ctl *SettingController) Update(c fiber.Ctx) error {
 
 	// Kirim konfigurasi baru ke ESP32 via MQTT
 	if services.MQTT != nil {
-		_ = services.MQTT.SendThreshold(product.ToleranceMin, product.ToleranceMax)
-		_ = services.MQTT.SendSetpoint(product.SetpointRPM)
+		if err := services.MQTT.SendThreshold(product.ToleranceMin, product.ToleranceMax); err != nil {
+			return c.Redirect().With("error", "Pengaturan tersimpan di database, namun gagal sinkron ke ESP32: "+err.Error()).To("/settings")
+		}
+		if err := services.MQTT.SendSetpoint(product.SetpointRPM); err != nil {
+			return c.Redirect().With("error", "Pengaturan tersimpan di database, namun gagal kirim setpoint ke ESP32: "+err.Error()).To("/settings")
+		}
 	}
 
 	return c.Redirect().With("success", "Pengaturan berhasil disimpan dan dikirimkan ke ESP32.").To("/settings")

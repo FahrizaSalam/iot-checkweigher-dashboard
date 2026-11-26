@@ -44,6 +44,12 @@ func NewApp() *fiber.App {
 		CookieName:     "csrf_token",
 		CookieSameSite: "Lax",
 		ErrorHandler: func(c fiber.Ctx, err error) error {
+			if strings.HasPrefix(c.Path(), "/api/") || strings.Contains(c.Get("Accept"), "application/json") {
+				return c.Status(419).JSON(fiber.Map{
+					"success": false,
+					"error":   "Sesi halaman kedaluwarsa (token CSRF tidak valid). Silakan refresh halaman.",
+				})
+			}
 			return c.Status(419).SendString("419 | Halaman kedaluwarsa (token CSRF tidak valid). Silakan muat ulang halaman.")
 		},
 	}))

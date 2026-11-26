@@ -72,6 +72,8 @@ func (ctl *DashboardController) Index(c fiber.Ctx) error {
 	weightChartJSON, _ := json.Marshal(recentWeighings)
 	rpmChartJSON, _ := json.Marshal(recentConveyorLogs)
 
+	mqttClient := config.GetMQTTClient()
+
 	return helpers.View(c, "dashboard/index", fiber.Map{
 		"Title":           "Dashboard",
 		"LatestWeighing":  latestWeighing,
@@ -82,7 +84,7 @@ func (ctl *DashboardController) Index(c fiber.Ctx) error {
 		"ActiveProduct":   activeProduct,
 		"WeightChartJSON": string(weightChartJSON),
 		"RPMChartJSON":    string(rpmChartJSON),
-		"BrokerConnected": config.MQTTClient != nil && config.MQTTClient.IsConnected(),
+		"BrokerConnected": mqttClient != nil && mqttClient.IsConnected(),
 	})
 }
 

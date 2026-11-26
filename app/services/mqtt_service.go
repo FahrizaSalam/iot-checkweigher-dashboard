@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"checkweigher/app/models"
@@ -15,36 +16,61 @@ import (
 )
 
 type MQTTService struct {
+	mu     sync.RWMutex
 	client mqtt.Client
 }
 
 var MQTT *MQTTService
 
 func InitMQTT(client mqtt.Client) *MQTTService {
-	MQTT = &MQTTService{client: client}
+	if MQTT == nil {
+		MQTT = &MQTTService{client: client}
+	} else {
+		MQTT.SetClient(client)
+	}
 	if client != nil && client.IsConnected() {
 		MQTT.Subscribe()
 	}
 	return MQTT
 }
 
+// SetClient memperbarui referensi client MQTT secara thread-safe saat koneksi terbentuk atau reconnect.
+func (s *MQTTService) SetClient(client mqtt.Client) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.client = client
+	s.mu.Unlock()
+}
+
+func (s *MQTTService) getClient() mqtt.Client {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.client
+}
+
 func (s *MQTTService) Subscribe() {
-	if s.client == nil || !s.client.IsConnected() {
+	client := s.getClient()
+	if client == nil || !client.IsConnected() {
 		return
 	}
 
 	// 1. Subscribe ke data penimbangan barang
-	s.client.Subscribe("checkweigher/weighing", 1, func(c mqtt.Client, m mqtt.Message) {
+	client.Subscribe("checkweigher/weighing", 1, func(c mqtt.Client, m mqtt.Message) {
 		s.handleWeighing(m.Payload())
 	})
 
 	// 2. Subscribe ke telemetri RPM conveyor PID
-	s.client.Subscribe("checkweigher/conveyor/rpm", 0, func(c mqtt.Client, m mqtt.Message) {
+	client.Subscribe("checkweigher/conveyor/rpm", 0, func(c mqtt.Client, m mqtt.Message) {
 		s.handleConveyorRPM(m.Payload())
 	})
 
 	// 3. Subscribe ke status perangkat
-	s.client.Subscribe("checkweigher/device/status", 0, func(c mqtt.Client, m mqtt.Message) {
+	client.Subscribe("checkweigher/device/status", 0, func(c mqtt.Client, m mqtt.Message) {
 		s.handleDeviceStatus(m.Payload())
 	})
 
@@ -223,52 +249,46 @@ func (s *MQTTService) handleDeviceStatus(payload []byte) {
 	})
 }
 
-// SendCommand mengirim perintah START/STOP/TARE ke ESP32.
-func (s *MQTTService) SendCommand(command string) error {
-	if s.client == nil || !s.client.IsConnected() {
+func (s *MQTTService) publishJSON(topic string, payloadData interface{}) error {
+	client := s.getClient()
+	if client == nil || !client.IsConnected() {
 		return fmt.Errorf("MQTT broker tidak terhubung")
 	}
 
-	payload, _ := json.Marshal(map[string]string{
+	payload, err := json.Marshal(payloadData)
+	if err != nil {
+		return err
+	}
+
+	token := client.Publish(topic, 1, false, payload)
+	if !token.WaitTimeout(5 * time.Second) {
+		return fmt.Errorf("timeout mengirim pesan ke broker MQTT")
+	}
+	return token.Error()
+}
+
+// SendCommand mengirim perintah START/STOP/TARE ke ESP32.
+func (s *MQTTService) SendCommand(command string) error {
+	return s.publishJSON("checkweigher/command", map[string]string{
 		"command":   command,
 		"timestamp": time.Now().Format(time.RFC3339),
 	})
-
-	token := s.client.Publish("checkweigher/command", 1, false, payload)
-	token.Wait()
-	return token.Error()
 }
 
 // SendThreshold mengirim update batas toleransi ke ESP32.
 func (s *MQTTService) SendThreshold(min, max float64) error {
-	if s.client == nil || !s.client.IsConnected() {
-		return fmt.Errorf("MQTT broker tidak terhubung")
-	}
-
-	payload, _ := json.Marshal(map[string]interface{}{
+	return s.publishJSON("checkweigher/config/threshold", map[string]interface{}{
 		"tolerance_min": min,
 		"tolerance_max": max,
 		"timestamp":     time.Now().Format(time.RFC3339),
 	})
-
-	token := s.client.Publish("checkweigher/config/threshold", 1, false, payload)
-	token.Wait()
-	return token.Error()
 }
 
 // SendSetpoint mengirim update setpoint RPM ke ESP32.
 func (s *MQTTService) SendSetpoint(rpm float64) error {
-	if s.client == nil || !s.client.IsConnected() {
-		return fmt.Errorf("MQTT broker tidak terhubung")
-	}
-
-	payload, _ := json.Marshal(map[string]interface{}{
+	return s.publishJSON("checkweigher/config/setpoint", map[string]interface{}{
 		"setpoint_rpm": rpm,
 		"timestamp":    time.Now().Format(time.RFC3339),
 	})
-
-	token := s.client.Publish("checkweigher/config/setpoint", 1, false, payload)
-	token.Wait()
-	return token.Error()
 }
 
