@@ -2,7 +2,9 @@ package bootstrap
 
 import (
 	"errors"
+	"log"
 	"strings"
+	"time"
 
 	"checkweigher/app/helpers"
 	"checkweigher/app/middleware"
@@ -27,12 +29,17 @@ func NewApp() *fiber.App {
 	engine.AddFunc("hasPrefix", strings.HasPrefix)
 	engine.AddFunc("add", func(a, b int) int { return a + b })
 
-	// 2. Instance Fiber
+	// 2. Instance Fiber (percaya header proxy lokal/private seperti Nginx aaPanel untuk X-Forwarded-Proto/Host)
 	app := fiber.New(fiber.Config{
 		AppName:      config.Env("APP_NAME", "Checkweigher IoT"),
 		Views:        engine,
 		ViewsLayout:  "layouts/app", // layout default untuk semua c.Render()
 		ErrorHandler: errorHandler,
+		TrustProxy:   true,
+		TrustProxyConfig: fiber.TrustProxyConfig{
+			Loopback: true,
+			Private:  true,
+		},
 	})
 
 	// 3. Middleware global
@@ -42,8 +49,11 @@ func NewApp() *fiber.App {
 	app.Use(csrf.New(csrf.Config{        // proteksi CSRF
 		Extractor:      extractors.Chain(extractors.FromHeader("X-CSRF-Token"), extractors.FromForm("_csrf")),
 		CookieName:     "csrf_token",
+		CookiePath:     "/",
 		CookieSameSite: "Lax",
+		IdleTimeout:    12 * time.Hour,
 		ErrorHandler: func(c fiber.Ctx, err error) error {
+			log.Printf("[CSRF] Ditolak %s %s (scheme=%s, host=%s, origin=%s): %v", c.Method(), c.Path(), c.Scheme(), c.Host(), c.Get("Origin"), err)
 			if strings.HasPrefix(c.Path(), "/api/") || strings.Contains(c.Get("Accept"), "application/json") {
 				return c.Status(419).JSON(fiber.Map{
 					"success": false,
