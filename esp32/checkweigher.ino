@@ -282,60 +282,6 @@ void publishConveyorRPM() {
   mqttPublish("checkweigher/conveyor/rpm", buf);
 }
 
-// Mengirim status dan nilai terbaru seluruh sensor serta aktuator ke broker MQTT.
-void publishDeviceStatus() {
-  JsonDocument doc;
-  JsonArray arr = doc.to<JsonArray>();
-
-  JsonObject d1 = arr.add<JsonObject>();
-  d1["device_name"] = "LoadCell HX711";
-  d1["device_type"] = "loadcell";
-  d1["status"] = scale.is_ready() ? "ONLINE" : "OFFLINE";
-  char wBuf[16];
-  snprintf(wBuf, sizeof(wBuf), "%.1f g", currentWeightG);
-  d1["last_value"] = wBuf;
-
-  JsonObject d2 = arr.add<JsonObject>();
-  d2["device_name"] = "Rotary Encoder";
-  d2["device_type"] = "encoder";
-  d2["status"] = "ONLINE";
-  char rBuf[16];
-  snprintf(rBuf, sizeof(rBuf), "%.1f RPM", rpmFiltered);
-  d2["last_value"] = rBuf;
-
-  JsonObject d3 = arr.add<JsonObject>();
-  d3["device_name"] = "Servo SG90";
-  d3["device_type"] = "servo";
-  d3["status"] = "ONLINE";
-  char sBuf[16];
-  snprintf(sBuf, sizeof(sBuf), "%d deg", sortingServo.read());
-  d3["last_value"] = sBuf;
-
-  JsonObject d4 = arr.add<JsonObject>();
-  d4["device_name"] = "IR Sensor";
-  d4["device_type"] = "infrared";
-  d4["status"] = "ONLINE";
-  d4["last_value"] = irDetected() ? "DETECTED" : "IDLE";
-
-  JsonObject d5 = arr.add<JsonObject>();
-  d5["device_name"] = "DC Motor";
-  d5["device_type"] = "motor";
-  d5["status"] = "ONLINE";
-  char mBuf[16];
-  snprintf(mBuf, sizeof(mBuf), "PWM: %d", pwmOut);
-  d5["last_value"] = mBuf;
-
-  JsonObject d6 = arr.add<JsonObject>();
-  d6["device_name"] = "RFID Reader";
-  d6["device_type"] = "rfid";
-  d6["status"] = "ONLINE";
-  d6["last_value"] = currentUID.length() > 0 ? currentUID.c_str() : "IDLE";
-
-  char out[800];
-  serializeJson(doc, out, sizeof(out));
-  mqttPublish("checkweigher/device/status", out);
-}
-
 // Menangani pesan kontrol, threshold toleransi, dan setpoint RPM yang masuk dari broker MQTT.
 void mqttCallback(char* topicName, byte* payload, unsigned int len) {
   char msg[256];
@@ -371,7 +317,6 @@ void mqttCallback(char* topicName, byte* payload, unsigned int len) {
     if (!doc["tolerance_min"].isNull()) toleranceMin = doc["tolerance_min"].as<float>();
     if (!doc["tolerance_max"].isNull()) toleranceMax = doc["tolerance_max"].as<float>();
     Serial.printf("[CMD] Threshold update dari web: min=%.1f max=%.1f\n", toleranceMin, toleranceMax);
-    publishDeviceStatus();
   }
   else if (t == "checkweigher/config/setpoint") {
     JsonDocument doc;
@@ -380,7 +325,6 @@ void mqttCallback(char* topicName, byte* payload, unsigned int len) {
     if (!doc["setpoint_rpm"].isNull()) {
       setpointRPM = constrain(doc["setpoint_rpm"].as<float>(), 0.0, MAX_RPM_LIMIT);
       Serial.printf("[CMD] Setpoint RPM update dari web: %.2f\n", setpointRPM);
-      publishDeviceStatus();
     }
   }
 }
@@ -398,7 +342,6 @@ void connectMqtt() {
     mqtt.subscribe("checkweigher/config/setpoint");
 
     Serial.println("[MQTT] Subscribe: command, config/threshold, config/setpoint");
-    publishDeviceStatus();
   } else {
     Serial.printf("gagal, rc=%d\n", mqtt.state());
   }
@@ -419,19 +362,13 @@ void mqttLoop() {
   }
 }
 
-// Mengirim data telemetri RPM dan heartbeat status perangkat sesuai interval waktu masing-masing.
+// Mengirim data telemetri RPM konveyor sesuai interval waktu status motor.
 void telemetryLoop() {
   static unsigned long lastRPM = 0;
   unsigned long rpmInterval = conveyorRunning ? 1000 : 5000;
   if (millis() - lastRPM >= rpmInterval) {
     lastRPM = millis();
     publishConveyorRPM();
-  }
-
-  static unsigned long lastHeartbeat = 0;
-  if (millis() - lastHeartbeat >= 10000) {
-    lastHeartbeat = millis();
-    publishDeviceStatus();
   }
 }
 
@@ -527,7 +464,6 @@ void resetCycle() {
   if (pendingWeighingPublish) {
     float avgSpeed = (cycleRpmCount > 0) ? (cycleRpmSum / cycleRpmCount) : rpmFiltered;
     publishWeighing(avgSpeed);
-    publishDeviceStatus();
     pendingWeighingPublish = false;
   }
   stopConveyor();
@@ -645,7 +581,6 @@ void loop() {
   if (tareRequested) {
     tareRequested = false;
     prosesTare();
-    publishDeviceStatus();
   }
 
   switch (state) {
@@ -731,7 +666,6 @@ void loop() {
 
         if (currentCategory == "ERROR") {
           publishWeighing(0.0);
-          publishDeviceStatus();
           Serial.println("[ERROR] Berat melebihi toleransi maksimum! Konveyor TIDAK dijalankan.");
           Serial.println("[INFO] Angkat barang, lalu siklus akan reset.");
           resetCycle();
@@ -741,7 +675,6 @@ void loop() {
         pendingWeighingPublish = true;
         cycleRpmSum = 0.0;
         cycleRpmCount = 0;
-        publishDeviceStatus();
 
         Serial.println("[CONVEYOR] Conveyor dijalankan...");
         startConveyor();
